@@ -1,0 +1,39 @@
+# ============================================================================
+#  文本 / 二进制判定与行尾策略
+#
+#  起因：早期提交的 game_telem.c 里误含裸控制字符（CR/LF 直接写进了字符字面量），
+#  git 的自动检测把它判成二进制文件（索引中标记为 -text），导致
+#  「只改了 1 行却显示整个文件都变了」的 diff。
+#  显式声明 *.c/*.h 为文本可从根上避免这类误判。
+#
+#  行尾：仓库内统一为 LF，检出到 Windows 时由 core.autocrlf 转为 CRLF。
+# ============================================================================
+
+* text=auto
+
+# 源码与工程文件 —— 一律文本
+*.c        text
+*.h        text
+*.cpp      text
+*.asm      text
+*.s43      text
+*.cmd      text
+*.md       text
+*.txt      text
+*.py       text
+*.ps1      text
+*.json     text
+*.inf      text
+*.ccxml    text
+.project   text
+.cproject  text
+.ccsproject text
+
+# 二进制 —— 不做行尾转换
+*.lib      binary
+*.out      binary
+*.obj      binary
+*.docx     binary
+*.vsdx     binary
+*.png      binary
+*.emf      binary

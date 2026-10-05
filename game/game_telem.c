@@ -180,6 +180,5 @@ void Telem_Calib(const uint16_t *delta, const uint16_t *peak, const uint16_t *th
     for (i = 0; i < 5; i++) { put(' '); put_u32w(peak[i], 4); }
     puts_raw(" | thr");
     for (i = 0; i < 5; i++) { put(' '); put_u32w(thr[i], 4); }
-    put(''); put('
-');
+    put('\r'); put('\n');
 }
