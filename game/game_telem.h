@@ -22,6 +22,14 @@ extern void Telem_Init(void);            /* UCA1 115200 @ SMCLK25M */
    noteMs = 命中的音符时刻；未命中传 0xFFFFFFFF */
 extern void Telem_Tap(uint8_t lane, uint32_t tapMs, uint32_t noteMs, uint8_t result);
 
+/* 版本横幅：开机打一行，记录本固件的全部可调参数。
+   为什么需要它：多次分析串口日志时无法判断"这份 log 烧的是哪版固件"，
+   导致把建模仿真建立在错误的基线上（本工程真实踩过）。
+   每次改动后请把 tag 往上带一位。 */
+extern void Telem_Version(const char *tag, uint16_t speedPx, int16_t alignPx,
+                          int32_t winPerfect, int32_t winGreat, int32_t winGood,
+                          const uint16_t *thr5);
+
 /* 把队列里的击打行统一发出（扫描窗口外调用，会阻塞到发完） */
 extern void Telem_Flush(void);
 

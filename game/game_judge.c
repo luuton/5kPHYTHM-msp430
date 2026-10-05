@@ -33,6 +33,8 @@ static uint32_t score;
 static uint16_t counts[6];              /* 按 JR_* 统计 */
 static uint8_t  anyBreak;               /* 是否有过 MISS/WRONG（full combo 用） */
 static uint32_t lastHitNoteMs = 0xFFFFFFFFu;   /* 遥测：最近命中的音符时刻 */
+static int32_t  dtSum = 0;                     /* dt 累计（含符号），用于设置界面标定 */
+static uint16_t dtN   = 0;
 
 const Chart *Judge_Chart(void) { return cur; }
 
@@ -67,6 +69,7 @@ void Judge_Reset(void)
     score = 0;
     anyBreak = 0;
     lastHitNoteMs = 0xFFFFFFFFu;
+    dtSum = 0; dtN = 0;
     for (i = 0; i < 6; i++) counts[i] = 0;
 }
 
@@ -126,6 +129,8 @@ uint8_t Judge_Tap(uint16_t lane, uint32_t tapTimeMs)
             work[n].judged = 1;
             work[n].result = grade_of(dt < 0 ? -dt : dt);
             lastHitNoteMs = work[n].t_ms;
+            dtSum += dt;                       /* 记录带符号的 dt，供均值标定 */
+            dtN++;
             account(work[n].result, lane);
             hit = work[n].result;          /* 返回判定码（JR_PERFECT..） */
             break;
@@ -155,6 +160,11 @@ uint16_t Judge_MaxCombo(void)  { return maxCombo; }
 uint8_t  Judge_FullCombo(void) { return (uint8_t)(!anyBreak && workCount); }
 
 uint32_t Judge_LastHitNoteMs(void) { return lastHitNoteMs; }
+
+/* 最近一局命中音符的 dt 均值（ms）。设置界面用它标定 JDG_OFFSET_MS：
+   把 OFF 调到 -dtAvg 即可让均值归零。 */
+int32_t Judge_DtMeanMs(void) { return dtN ? (dtSum / (int32_t)dtN) : 0; }
+uint16_t Judge_DtCount(void) { return dtN; }
 
 const Note *Judge_Notes(void)  { return work; }
 uint16_t Judge_NoteCount(void) { return workCount; }

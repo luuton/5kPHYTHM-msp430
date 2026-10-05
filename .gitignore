@@ -55,9 +55,11 @@ report_tools/figs/
 # ---------------------------------------------------------------------------
 #  本地编辑器 / 工具设置
 #  .clangd 文件头明确写着 "auto-generated file - do not add it to source-control"
+#  .claude/ 整个目录保持本地私有：里面是工作流 skill 与本地设置，
+#  属于个人工具链，不随项目发布。
 # ---------------------------------------------------------------------------
 .clangd
-.claude/settings.local.json
+.claude/
 .vscode/
 .idea/
 *.theia-workspace.user
@@ -82,10 +84,12 @@ FatFs/option/syscall.c
 
 # ---------------------------------------------------------------------------
 #  调试用临时文件
-#  test.txt 是从串口抓下来的击打日志，属个人调试数据，默认不入库
-#  （如需保留为样例数据，用 git add -f test.txt 强制加入）
+#  串口日志（test.txt / log1.txt / log2.txt ...）是个人调试数据，不入库。
+#  如需保留某一份作为样例数据，用 git add -f <文件> 强制加入。
+#  注意不要用通配 *.txt：readme.txt、FatFs/00readme.txt 是要入库的。
 # ---------------------------------------------------------------------------
 test.txt
+log*.txt
 *.bak
 *.tmp
 *~

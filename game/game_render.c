@@ -20,25 +20,46 @@
 #include "game_play.h"
 #include "game_chart.h"
 
+int16_t Render_NoteAlignPx = 3;   /* 见 game_render.h 说明；设置界面可改 */
+
 static char numbuf[6];
 
-static void fmt_u16(uint16_t v)
+/* 右对齐定宽无符号十进制，结果写入 numbuf */
+static void fmt_u16(uint16_t v, uint8_t digits)
 {
     int8_t i;
-    for (i = 4; i >= 0; i--) { numbuf[i] = (char)('0' + v % 10); v /= 10; }
-    numbuf[5] = 0;
+    for (i = (int8_t)digits - 1; i >= 0; i--) { numbuf[i] = (char)('0' + v % 10); v /= 10; }
+    numbuf[digits] = 0;
+}
+
+/* 右对齐定宽带符号十进制（空格补齐，b 至少 digits+2 字节） */
+static void fmt_i16(char *b, int16_t v, uint8_t digits)
+{
+    uint8_t i;
+    uint16_t u = (uint16_t)(v < 0 ? -v : v);
+    b[0] = (v < 0) ? '-' : '+';
+    b[digits + 1] = 0;
+    for (i = 0; i < digits; i++)
+    {
+        b[digits - i] = (u ? (char)('0' + u % 10) : ((i == 0) ? '0' : ' '));
+        u /= 10;
+    }
 }
 
 /* 把 16 进制值花式居中打印等（结算页用） */
 
 
+/* 状态栏布局（6px/字符）：
+     分数   5 位 @ x=0   （0..29）
+     Combo  标签 @ x=30  （30..59）  ← 原为 24，会与分数末位重叠，右移一格
+     连击数 4 位 @ x=62  （62..85）  ← 原为 5 位 @56，改为 4 位并右移一格 */
 static void draw_status(void)
 {
-    fmt_u16((uint16_t)Judge_Score());
+    fmt_u16((uint16_t)Judge_Score(), 5);
     RTLCD_String(0, 0, numbuf, 0);
-    RTLCD_String(24, 0, "Combo", 0);
-    fmt_u16(Judge_Combo());
-    RTLCD_String(56, 0, numbuf, 0);
+    RTLCD_String(30, 0, "Combo", 0);
+    fmt_u16(Judge_Combo(), 4);
+    RTLCD_String(62, 0, numbuf, 0);
 }
 
 static void draw_notes(void)
@@ -61,8 +82,8 @@ static void draw_notes(void)
         if (dtms * (int32_t)speed / 1000 > REN_JUDGE_Y + 4)
             break;                        /* 还没进入屏幕（后面的更晚） */
         dy = (dtms * (int32_t)speed) / 1000;
-        /* 音符块中心对齐判定线：判定时刻 t_ms 时块中心 = 判定线 */
-        y  = REN_JUDGE_Y - dy - (REN_NOTE_H / 2);
+        /* dt=0（判定时刻）时音符相对判定线的位置，由 REN_NOTE_ALIGN_PX 标定 */
+        y  = REN_JUDGE_Y - dy - Render_NoteAlignPx;
         x  = REN_LANE_X(nt[i].lane) + 2;
         if (y > (int32_t)(RTLCD_H - REN_NOTE_H)) y = (int32_t)(RTLCD_H - REN_NOTE_H);
         if (nt[i].judged) continue;       /* 已判的不画（MISS/命中都消失） */
@@ -214,7 +235,8 @@ void Render_MainMenu(uint8_t selected)
         }
         RTLCD_String(0, (uint8_t)(16 + i * 12), line, (uint8_t)(i == selected));
     }
-    RTLCD_String(0, 56, "Wheel:song S2:start", 0);
+    RTLCD_String(0, 48, "Whl:song  S2:go", 0);
+    RTLCD_String(0, 56, "S1hold:SETTINGS", 0);
     RTLCD_Present();
 }
 
@@ -234,5 +256,51 @@ void Render_Paused(void)
     RTLCD_String(21, 24, "PAUSED", 0);
     RTLCD_String(6, 40, "S2:resume", 0);
     RTLCD_String(6, 52, "S1:restart", 0);
+    RTLCD_Present();
+}
+
+/* ============================ 设置界面 ============================
+   布局（6x8 字体，行距 9~10 px）：
+     y=0   SETTINGS
+     y=10  >OFF  <判定偏移 ms>      可调 -100..+100 步 5
+     y=19   ALN  <视觉对齐 px>      可调 -2..+6   步 1
+     y=28   SPD  <下落速度 px/s>    可调 40..120  步 10
+     y=37   WIN  <PERFECT 窗口 ms>  可调 15..60   步 5（GREAT/GOOD 按 1:2:10/3 联动）
+     y=46  dt avg <最近一局 dt 均值> 只读，用来标定 OFF
+     y=54  按键提示
+   标定方法：跑一局 → 看 dt avg → 把 OFF 调到 -dt avg（步 5）→ 再跑一局确认接近 0。 */
+void Render_Settings(uint8_t sel)
+{
+    static const char *const names[4] = { "OFF", "ALN", "SPD", "WIN" };
+    char b[10];
+    uint8_t i;
+
+    RTLCD_Clear();
+    RTLCD_String(0, 0, "SETTINGS", 0);
+
+    for (i = 0; i < 4; i++)
+    {
+        uint8_t y = (uint8_t)(10 + i * 9);
+        b[0] = (i == sel) ? '>' : ' ';
+        b[1] = 0;
+        RTLCD_String(0, y, b, 0);
+        RTLCD_String(6, y, names[i], 0);
+
+        switch (i)
+        {
+        case 0:  fmt_i16(b, (int16_t)JDG_OFFSET_MS, 3);      break;
+        case 1:  fmt_i16(b, Render_NoteAlignPx, 2);          break;
+        case 2:  fmt_i16(b, (int16_t)Play_SpeedPxPerS(), 3); break;
+        default: fmt_i16(b, (int16_t)JDG_WIN_PERFECT, 2);    break;
+        }
+        RTLCD_String(42, y, b, 0);
+    }
+
+    RTLCD_String(0, 46, "dt avg", 0);
+    fmt_i16(b, (int16_t)Judge_DtMeanMs(), 3);
+    RTLCD_String(48, 46, b, 0);
+    RTLCD_String(72, 46, "ms", 0);
+
+    RTLCD_String(0, 55, "Whl:item S1- S2+", 0);
     RTLCD_Present();
 }

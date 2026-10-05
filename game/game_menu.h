@@ -26,7 +26,10 @@ extern void Menu_Update(const MenuEvents *ev, uint32_t nowMs);
 /* 当前选中的曲目 index（Play_Start 用） */
 extern uint8_t Menu_SelectedChart(void);
 
+/* 设置界面的光标项（0..3），供渲染层使用 */
+extern uint8_t Menu_SettingsSel(void);
+
 /* 菜单状态 */
-extern uint8_t Menu_Screen(void);   /* 0=logo 1=主菜单 2=游戏中家 3=暂停 4=结算 */
+extern uint8_t Menu_Screen(void);   /* 0=logo 1=主菜单 2=游戏中 3=暂停 4=结算 5=设置 */
 
 #endif /* GAME_MENU_H */

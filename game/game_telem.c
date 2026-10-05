@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include "msp430.h"
 #include "game_telem.h"
+#include "game_judge.h"   /* 横幅要输出 JDG_OFFSET_MS */
 
 #define TELEM_QMAX  8
 
@@ -86,6 +87,36 @@ void Telem_Init(void)
 }
 
 void Telem_Enable(uint8_t on) { enabled = on; }
+
+/* 开机横幅：V <tag> spd=<n> aln=<±n> win=<p>/<g>/<d> thr=<t0>,<t1>,... */
+void Telem_Version(const char *tag, uint16_t speedPx, int16_t alignPx,
+                   int32_t winPerfect, int32_t winGreat, int32_t winGood,
+                   const uint16_t *thr5)
+{
+    uint8_t i;
+    if (!enabled) return;
+
+    put('V'); put(' ');
+    puts_raw(tag);
+    puts_raw(" spd="); put_u32w(speedPx, 2);
+    puts_raw(" off=");
+    if (JDG_OFFSET_MS < 0) { put('-'); put_u32w((uint32_t)(-JDG_OFFSET_MS), 3); }
+    else                   { put('+'); put_u32w((uint32_t)JDG_OFFSET_MS, 3); }
+    puts_raw(" aln=");
+    if (alignPx < 0) { put('-'); put_u32w((uint32_t)(-alignPx), 2); }
+    else             { put('+'); put_u32w((uint32_t)alignPx, 2); }
+    puts_raw(" win=");
+    put_u32w((uint32_t)winPerfect, 2); put('/');
+    put_u32w((uint32_t)winGreat,   2); put('/');
+    put_u32w((uint32_t)winGood,    3);
+    puts_raw(" thr=");
+    for (i = 0; i < 5; i++)
+    {
+        if (i) put(',');
+        put_u32w(thr5[i], 3);
+    }
+    put('\r'); put('\n');
+}
 
 static const char *const RES_NAME[6] = { "-", "MISS", "GOOD", "GREAT", "PERFECT", "WRONG" };
 

@@ -46,6 +46,10 @@ extern const Chart *Judge_Chart(void);
 /* 最近一次命中的音符时刻（遥测用；未命中为 0xFFFFFFFF） */
 extern uint32_t Judge_LastHitNoteMs(void);
 
+/* 最近一局 dt 均值（ms）与样本数，用于标定 JDG_OFFSET_MS */
+extern int32_t  Judge_DtMeanMs(void);
+extern uint16_t Judge_DtCount(void);
+
 /* 渲染层访问 RAM 镜像（Note 含 judged/result） */
 extern const Note *Judge_Notes(void);
 extern uint16_t    Judge_NoteCount(void);

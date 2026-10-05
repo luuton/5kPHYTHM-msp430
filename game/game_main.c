@@ -28,6 +28,12 @@
 #include "game_menu.h"
 #include "game_chart.h"
 #include "game_telem.h"
+#include "game_save.h"
+
+/* 固件版本 tag：每次改动行为后往上带一位，随遥测横幅输出。
+   用途：分析串口日志时能确定"这份 log 烧的是哪版固件"。
+   （本工程曾因无法分辨固件版本，把建模建立在错误基线上。） */
+#define FW_TAG          "5k-r5"
 
 #define FRAME_MS        16u          /* 60 fps */
 #define SCAN_BUDGET_MS  4u           /* 阶段 1 上限（E0.2 实测调整） */
@@ -63,6 +69,11 @@ void Game5K_Run(void)
     uint32_t frameStart;
 
     Telem_Init();                            /* 先起串口，后面所有日志可发 */
+    Save_LoadSettings();                     /* 读回掉电保持的设置（在横幅之前，
+                                                这样 V 行报的就是实际生效的参数） */
+    Telem_Version(FW_TAG, Play_SpeedPxPerS(), Render_NoteAlignPx,
+                  JDG_WIN_PERFECT, JDG_WIN_GREAT, JDG_WIN_GOOD,
+                  Touch_Thresholds);         /* 开机横幅：记录本固件的可调参数 */
     Touch_Init(8);
     RTLCD_Init();
     Menu_Init();
@@ -154,6 +165,9 @@ void Game5K_Run(void)
                 break;
             case 4:  /* M_RESULT */
                 Render_Result();
+                break;
+            case 5:  /* M_SETTINGS */
+                Render_Settings(Menu_SettingsSel());
                 break;
             default: /* M_LOGO */
                 break;    /* logo 仍在屏上 */
