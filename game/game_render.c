@@ -102,6 +102,29 @@ static void draw_notes(void)
     }
 }
 
+/* 实时判定显示：最近一次判定后 400 ms 内，在判定线正下方居中弹出
+   PERFECT / GREAT / GOOD / MISS。居中按 6px/字符 计算。 */
+static void draw_judgment(void)
+{
+    static const char *const txt[6] = { "", "MISS", "GOOD", "GREAT", "PERFECT", "" };
+    uint8_t     r = Judge_LastResult();
+    const char *s;
+    uint8_t     n, x;
+
+    /* 底部 8px 是判定专用区：先清干净。
+       否则判定文字与音符同为"置位像素"，叠加后互相淹没、读不出来；
+       而这一条本就在判定线下方，只影响已越过判定线、即将 MISS 的音符尾部。 */
+    RTLCD_FillRect(0, REN_JUDGE_TXT_Y, RTLCD_W - 1, RTLCD_H - 1, 0);
+
+    if (r == JR_NONE || r == JR_WRONG || r > JR_PERFECT) return;
+    if (Play_SongTimeMs() - Judge_LastResultMs() > REN_JUDGE_TXT_MS) return;
+
+    s = txt[r];
+    for (n = 0; s[n]; n++) ;
+    x = (uint8_t)((RTLCD_W - n * 6u) / 2u);
+    RTLCD_String(x, REN_JUDGE_TXT_Y, s, 0);
+}
+
 static void draw_judgeline(uint8_t pressed)
 {
     uint8_t lane;
@@ -117,12 +140,40 @@ static void draw_judgeline(uint8_t pressed)
     }
 }
 
-void Render_Frame(uint8_t lanePressedBits)
+/* 只画不推屏：供 Render_Frame 与 Render_Resume 共用，
+   避免倒计时画面推两次屏（每次 2.7 ms）。 */
+static void render_scene(uint8_t lanePressedBits)
 {
     RTLCD_Clear();
     draw_status();
     draw_notes();
     draw_judgeline(lanePressedBits);
+    draw_judgment();          /* 最后画，压在音符之上 */
+}
+
+void Render_Frame(uint8_t lanePressedBits)
+{
+    render_scene(lanePressedBits);
+    RTLCD_Present();
+}
+
+/* 暂停恢复倒计时：谱面冻结在暂停位置（songNow 未推进），
+   中间压一个大号数字。数字底下先清一块，避免与下落音符同色糊在一起。 */
+void Render_Resume(uint8_t lanePressedBits, uint32_t remainMs)
+{
+    char    c[2];
+    uint8_t d;
+
+    render_scene(lanePressedBits);
+
+    d = (uint8_t)((remainMs + 999u) / 1000u);    /* 5,4,3,2,1 */
+    if (d > 5u) d = 5u;
+    c[0] = (char)('0' + d);
+    c[1] = 0;
+
+    /* 2x 字模每字符 12x16：(102-12)/2 = 45 */
+    RTLCD_FillRect(42, 21, 59, 42, 0);
+    RTLCD_String2x(45, 24, c, 0);
     RTLCD_Present();
 }
 
@@ -153,7 +204,10 @@ void Render_Result(void)
             row[6] = 0;
             RTLCD_String(0, (uint8_t)(34 + i * 8), row, 0);
         }
-        if (Judge_FullCombo()) RTLCD_String(48, 58, "FULL COMBO", 0);
+        if (Judge_FullCombo()) {
+            RTLCD_String(48, 50, "FULL", 0);
+            RTLCD_String(48, 58, "COMBO", 0);
+        }
         else
         {
             char mc[10] = "MAX:000";
@@ -250,12 +304,19 @@ void Render_Ready(uint32_t remainMs)
     RTLCD_Present();
 }
 
+/* 暂停页。居中按 6px/字符：(102 - 字符数*6)/2
+   PAUSED     6 字符 -> x=33
+   S2:resume  9 字符 -> x=24
+   S1:restart 10 字符 -> x=21
+   S1hold:quit 11 字符 -> x=18
+   原实现把 PAUSED 放在 x=21（未居中），且漏了"长按 S1 弃局"的提示。 */
 void Render_Paused(void)
 {
     RTLCD_Clear();
-    RTLCD_String(21, 24, "PAUSED", 0);
-    RTLCD_String(6, 40, "S2:resume", 0);
-    RTLCD_String(6, 52, "S1:restart", 0);
+    RTLCD_String(33, 14, "PAUSED", 0);
+    RTLCD_String(24, 32, "S2:resume", 0);
+    RTLCD_String(21, 42, "S1:restart", 0);
+    RTLCD_String(18, 52, "S1hold:quit", 0);
     RTLCD_Present();
 }
 

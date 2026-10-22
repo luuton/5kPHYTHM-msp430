@@ -32,9 +32,12 @@ static uint16_t maxCombo;
 static uint32_t score;
 static uint16_t counts[6];              /* 按 JR_* 统计 */
 static uint8_t  anyBreak;               /* 是否有过 MISS/WRONG（full combo 用） */
+static uint32_t lastNoteMs = 0;         /* 谱面最后一个音符的时刻（装载时算出） */
 static uint32_t lastHitNoteMs = 0xFFFFFFFFu;   /* 遥测：最近命中的音符时刻 */
 static int32_t  dtSum = 0;                     /* dt 累计（含符号），用于设置界面标定 */
 static uint16_t dtN   = 0;
+static uint8_t  lastResult = JR_NONE;          /* 最近一次判定（供屏幕实时显示） */
+static uint32_t lastResultMs = 0;              /* 该判定发生的曲目时刻 */
 
 const Chart *Judge_Chart(void) { return cur; }
 
@@ -43,11 +46,14 @@ void Judge_LoadChart(const Chart *c)
     uint16_t i;
     cur = c;
     workCount = (c->noteCount > CH_MAX_NOTES) ? CH_MAX_NOTES : c->noteCount;
+    lastNoteMs = 0;
     for (i = 0; i < workCount; i++)
     {
         work[i] = c->notes[i];          /* struct 拷贝（8 B） */
         work[i].judged = 0;
         work[i].result = JR_NONE;
+        /* 取最大值而不是直接取末元素：谱面按理按时间升序，但不做假设 */
+        if (work[i].t_ms > lastNoteMs) lastNoteMs = work[i].t_ms;
     }
     head = 0;
     combo = maxCombo = 0;
@@ -70,6 +76,7 @@ void Judge_Reset(void)
     anyBreak = 0;
     lastHitNoteMs = 0xFFFFFFFFu;
     dtSum = 0; dtN = 0;
+    lastResult = JR_NONE; lastResultMs = 0;
     for (i = 0; i < 6; i++) counts[i] = 0;
 }
 
@@ -131,6 +138,8 @@ uint8_t Judge_Tap(uint16_t lane, uint32_t tapTimeMs)
             lastHitNoteMs = work[n].t_ms;
             dtSum += dt;                       /* 记录带符号的 dt，供均值标定 */
             dtN++;
+            lastResult   = work[n].result;
+            lastResultMs = tapTimeMs;          /* 用原始曲目时刻，便于渲染层比较新鲜度 */
             account(work[n].result, lane);
             hit = work[n].result;          /* 返回判定码（JR_PERFECT..） */
             break;
@@ -148,6 +157,8 @@ void Judge_TimeoutMisses(uint32_t songTimeMs)
     {
         work[head].judged = 1;
         work[head].result = JR_MISS;
+        lastResult   = JR_MISS;
+        lastResultMs = songTimeMs;
         account(JR_MISS, work[head].lane);
         head++;
     }
@@ -161,9 +172,16 @@ uint8_t  Judge_FullCombo(void) { return (uint8_t)(!anyBreak && workCount); }
 
 uint32_t Judge_LastHitNoteMs(void) { return lastHitNoteMs; }
 
+/* 谱面最后一个音符的时刻（ms），供结束条件计算 */
+uint32_t Judge_LastNoteMs(void) { return lastNoteMs; }
+
 /* 最近一局命中音符的 dt 均值（ms）。设置界面用它标定 JDG_OFFSET_MS：
    把 OFF 调到 -dtAvg 即可让均值归零。 */
 int32_t Judge_DtMeanMs(void) { return dtN ? (dtSum / (int32_t)dtN) : 0; }
+
+/* 最近一次判定与发生时刻（曲目 ms），供渲染层做实时显示 */
+uint8_t  Judge_LastResult(void)   { return lastResult; }
+uint32_t Judge_LastResultMs(void) { return lastResultMs; }
 uint16_t Judge_DtCount(void) { return dtN; }
 
 const Note *Judge_Notes(void)  { return work; }

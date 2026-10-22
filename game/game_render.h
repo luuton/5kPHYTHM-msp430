@@ -13,6 +13,8 @@
 #define REN_NOTE_H          4      /* 音符高 */
 #define REN_STATUS_PAGES    1      /* 顶部状态栏高度（页） */
 #define REN_JUDGE_Y         55     /* 判定线 y */
+#define REN_JUDGE_TXT_Y     56     /* 判定文字 y（判定线正下方，8px 高正好占满底行） */
+#define REN_JUDGE_TXT_MS    400u   /* 判定文字显示时长（ms） */
 
 /* 音符在判定线处的对齐偏移（px，正值把音符整体上移；dt=0 时音符相对判定线 55 的位置：
    0=顶边贴线 / 2=中心贴线 / 3=底边贴线）。
@@ -40,6 +42,9 @@ extern void Render_Ready(uint32_t remainMs);
 
 /* 暂停页 */
 extern void Render_Paused(void);
+
+/* 暂停恢复倒计时：画面显示冻结的谱面 + 居中大号倒计时数字 */
+extern void Render_Resume(uint8_t lanePressedBits, uint32_t remainMs);
 
 /* 设置界面（sel = 当前光标项 0..3） */
 extern void Render_Settings(uint8_t sel);

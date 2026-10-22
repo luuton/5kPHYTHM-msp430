@@ -6,8 +6,8 @@
 //
 //  状态机：
 //    PL_READY   → 3-2-1 倒计时 1200 ms，完 → PLAYING
-//    PL_PLAYING → 谱面放完（songTime > length_ms + 500 ms）→ RESULT
-//    PL_PAUSED  →（由 Menu 层解除）
+//    PL_PLAYING → 谱面放完（min(length_ms+500, 末音符+GOOD+600)，且全部判完）→ RESULT
+//    PL_PAUSED  → 按 S2 请求恢复 → PL_RESUME（冻结谱面 + 5 s 倒计时）→ PL_PLAYING
 //    PL_RESULT  →（由 Menu 层返回）
 //
 //  判定已全部下放 Judge_*；本模块只管理时间、MISS 扫描与边界。
@@ -29,6 +29,7 @@ static uint32_t resultAtMs;
 static uint32_t songNow;
 static uint16_t speedPx = 60;   /* px/s：60 px/s @60fps = 1 px/帧，从容且整像素移动 */
 static uint32_t readyStartMs;
+static uint32_t resumeStartMs;
 
 uint8_t  Play_State(void)        { return state; }
 uint32_t Play_SongTimeMs(void)   { return songNow; }
@@ -68,6 +69,29 @@ void Play_ForceQuit(void)
 {
     state = PL_MENU;
     songNow = 0;
+}
+
+#define RESUME_COUNTDOWN_MS  5000u
+
+/* 从暂停恢复：先进入倒计时状态，让玩家重新看清谱面位置。
+   立即恢复的问题：暂停期间玩家的手和注意力都离开了，直接开始下落
+   会导致一恢复就连掉几个音符。 */
+void Play_RequestResume(uint32_t nowMs)
+{
+    if (state == PL_PAUSED)
+    {
+        resumeStartMs = nowMs;
+        state = PL_RESUME;
+        songNow = pausedAtMs;            /* 谱面停在暂停处 */
+    }
+}
+
+uint32_t Play_ResumeRemainMs(void)
+{
+    if (state != PL_RESUME) return 0;
+    if (gnow_last_ms <= resumeStartMs) return RESUME_COUNTDOWN_MS;
+    if (gnow_last_ms - resumeStartMs >= RESUME_COUNTDOWN_MS) return 0;
+    return RESUME_COUNTDOWN_MS - (gnow_last_ms - resumeStartMs);
 }
 
 void Play_PauseResume(uint32_t nowMs)
@@ -128,19 +152,44 @@ void Play_Update(uint32_t nowMs, uint8_t edges,
         /* 输入：上升沿在 Play_Tap 里由扫描中点直接给，这里只负责 MISS */
         (void)edges;
         Judge_TimeoutMisses(songNow);
-        if (Judge_NoteCount() &&
-            songNow > (Judge_Chart()->length_ms + 500u))
+        if (Judge_NoteCount())
         {
-            resultAtMs = songNow;
-            state = PL_RESULT;
-            Telem_Result(Judge_CountOf(JR_PERFECT), Judge_CountOf(JR_GREAT),
-                         Judge_CountOf(JR_GOOD),    Judge_CountOf(JR_MISS),
-                         Judge_Score(), Judge_MaxCombo());
+            /* 结束时刻取两者较小：
+                 tLen  = length_ms + 500      —— 谱面声明长度，留 500 ms 缓冲
+                 tNote = 最后音符 + GOOD + 600 —— 最后一个音符判完后再稳压 600 ms
+                                                 （判定文字显示 400 ms，不能立刻切走）
+               还有一个"全部判完"的兜底：若 length_ms 被填得比实际谱面短，
+               光靠 tLen 会提前跳结算、尾巴上的音符永远得不到判定
+               （表现为 R 行 PF+GR+GD+MISS 求和 ≠ 音符总数）。
+               加上 Judge_Head() >= Judge_NoteCount() 后：
+                 · length_ms 填大了 → 由 tNote 提前结束，玩家不用干等
+                 · length_ms 填小了 → 兜底生效，等音符真正判完再结束 */
+            uint32_t tLen  = Judge_Chart()->length_ms + 500u;
+            uint32_t tNote = Judge_LastNoteMs() + (uint32_t)JDG_WIN_GOOD + 600u;
+            uint32_t tEnd  = (tLen < tNote) ? tLen : tNote;
+
+            if (songNow > tEnd && Judge_Head() >= Judge_NoteCount())
+            {
+                resultAtMs = songNow;
+                state = PL_RESULT;
+                Telem_Result(Judge_CountOf(JR_PERFECT), Judge_CountOf(JR_GREAT),
+                             Judge_CountOf(JR_GOOD),    Judge_CountOf(JR_MISS),
+                             Judge_Score(), Judge_MaxCombo());
+            }
         }
         break;
 
     case PL_PAUSED:
         songNow = pausedAtMs;
+        break;
+
+    case PL_RESUME:
+        /* 谱面冻结在暂停处，等倒计时走完再接着下 */
+        songNow = pausedAtMs;
+        if (nowMs - resumeStartMs >= RESUME_COUNTDOWN_MS)
+        {
+            doResume(nowMs);             /* startWall 搬移，songNow 从 pausedAtMs 续上 */
+        }
         break;
 
     default:

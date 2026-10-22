@@ -148,6 +148,16 @@ void Menu_ScanEvents(MenuEvents *ev, uint32_t nowMs)
 
 void Menu_Update(const MenuEvents *ev, uint32_t nowMs)
 {
+    /* 进入主菜单时重新同步旋钮基准。
+       否则：在游戏/暂停/结算里转动过旋钮后回到菜单，第一帧会算出一个跳变，
+       把选曲光标直接跳走（wheelLast 是跨屏保存的）。 */
+    static uint8_t prevScreen = 0xFFu;
+    if (screen != prevScreen)
+    {
+        if (screen == M_MAIN) wheelLast = 0xFFFFu;
+        prevScreen = screen;
+    }
+
     switch (screen)
     {
     case M_LOGO:
@@ -254,9 +264,26 @@ void Menu_Update(const MenuEvents *ev, uint32_t nowMs)
         break;
 
     case M_PAUSE:
-        if (ev->s2Short) Play_PauseResume(nowMs);          /* 继续 */
+        /* S2 继续。⚠ 恢复后必须把 screen 切回 M_PLAY：
+           否则 Play_State() 已是 PL_PLAYING，主循环却仍渲染暂停页，
+           而 Play_Update 会照常推进曲目时间、照常判 MISS ——
+           表现为"按了继续画面没变、分数却在掉"。 */
+        if (ev->s2Short)
+        {
+            /* 不直接恢复：先进入 PL_RESUME，冻结谱面显示 5 s 倒计时，
+               让玩家重新看清音符位置再开始下落（直接恢复会一上来就连掉几个）。
+               同时切回游戏画面 —— 倒计时画面就是冻结的谱面。 */
+            Play_RequestResume(nowMs);
+            if (Play_State() == PL_RESUME) screen = M_PLAY;
+        }
         if (ev->s1Short) { Play_Start(CHART_list[selected]); screen = M_PLAY; }  /* 重开 */
-        if (ev->s1Long)  { screen = M_MAIN; Render_DemoIdle(); }
+        if (ev->s1Long)                                                    /* 弃局回主菜单 */
+        {
+            screen = M_MAIN;
+            Play_ForceQuit();          /* 与 M_PLAY 的 S1 长按保持一致，
+                                          别把 PL_PAUSED 状态残留给下一局 */
+            Render_DemoIdle();
+        }
         break;
 
     case M_RESULT:

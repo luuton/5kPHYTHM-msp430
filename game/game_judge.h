@@ -46,6 +46,14 @@ extern const Chart *Judge_Chart(void);
 /* 最近一次命中的音符时刻（遥测用；未命中为 0xFFFFFFFF） */
 extern uint32_t Judge_LastHitNoteMs(void);
 
+/* 谱面最后一个音符的时刻（ms）。用于"打完了没有"的结束判断，
+   比 Chart::length_ms 更可靠（那个是手填字段，与音符列表无关）。 */
+extern uint32_t Judge_LastNoteMs(void);
+
+/* 最近一次判定结果与发生时刻（曲目 ms），用于屏幕上实时弹出判定文字 */
+extern uint8_t  Judge_LastResult(void);
+extern uint32_t Judge_LastResultMs(void);
+
 /* 最近一局 dt 均值（ms）与样本数，用于标定 JDG_OFFSET_MS */
 extern int32_t  Judge_DtMeanMs(void);
 extern uint16_t Judge_DtCount(void);

@@ -33,7 +33,7 @@
 /* 固件版本 tag：每次改动行为后往上带一位，随遥测横幅输出。
    用途：分析串口日志时能确定"这份 log 烧的是哪版固件"。
    （本工程曾因无法分辨固件版本，把建模建立在错误基线上。） */
-#define FW_TAG          "5k-r5"
+#define FW_TAG          "5k-r7"
 
 #define FRAME_MS        16u          /* 60 fps */
 #define SCAN_BUDGET_MS  4u           /* 阶段 1 上限（E0.2 实测调整） */
@@ -155,6 +155,8 @@ void Game5K_Run(void)
                         Render_Frame(pressedPrev);
                     else if (ps == PL_PAUSED)
                         Render_Paused();
+                    else if (ps == PL_RESUME)
+                        Render_Resume(pressedPrev, Play_ResumeRemainMs());
                     else   /* PL_RESULT */
                         Render_Result();
                 }

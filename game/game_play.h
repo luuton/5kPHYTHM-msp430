@@ -7,7 +7,10 @@
 #include <stdint.h>
 #include "game_chart.h"
 
-enum { PL_MENU = 0, PL_READY = 1, PL_PLAYING = 2, PL_PAUSED = 3, PL_RESULT = 4 };
+enum {
+    PL_MENU = 0, PL_READY = 1, PL_PLAYING = 2, PL_PAUSED = 3, PL_RESULT = 4,
+    PL_RESUME = 5    /* 从暂停恢复：先冻结谱面显示 5 s 倒计时，再继续下落 */
+};
 
 extern uint8_t Play_State(void);
 
@@ -29,6 +32,13 @@ extern void Play_Tap(uint16_t lane, uint32_t tapTimeMs);
 
 /* 暂停/继续（在 nowMs 时刻） */
 extern void Play_PauseResume(uint32_t nowMs);
+
+/* 请求恢复：不立刻继续，而是进入 PL_RESUME 倒计时（谱面冻结显示）。
+   倒计时结束由 Play_Update 自动切到 PL_PLAYING。 */
+extern void Play_RequestResume(uint32_t nowMs);
+
+/* PL_RESUME 倒计时剩余 ms */
+extern uint32_t Play_ResumeRemainMs(void);
 
 /* 强制结束当前局（弃局回主菜单用） */
 extern void Play_ForceQuit(void);
