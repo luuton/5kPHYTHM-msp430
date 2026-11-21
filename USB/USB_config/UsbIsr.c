@@ -54,6 +54,7 @@ BOOL HidIsReceiveInProgress(BYTE);
 __interrupt VOID iUsbInterruptHandler(VOID)
 {
     BYTE bWakeUp = FALSE;
+
     //Check if the setup interrupt is pending.
     //We need to check it before other interrupts,
     //to work around that the Setup Int has lower priority then Input Endpoint 0

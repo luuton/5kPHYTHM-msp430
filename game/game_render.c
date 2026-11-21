@@ -13,14 +13,20 @@
 //  成本：每次全量 816 B 推屏 ≈ 2.7 ms（打表，project.md §5.3）
 //============================================================================//
 #include <stdint.h>
+#include "msp430.h"          /* 诊断页要直接读 UCSCTL / USBPLL / USBCNF 等寄存器 */
 #include "HAL_Dogs102x6.h"
 #include "game_rtlcd.h"
 #include "game_render.h"
 #include "game_judge.h"
 #include "game_play.h"
+#include "game_time.h"
 #include "game_chart.h"
+#include "game_usb.h"   /* Render_Settings 显示 USB ON/OFF */
+#include "game_touch.h"  /* 设置页显示 Touch_SensPct */
+#include "game_save.h"   /* 结算页/选曲页显示最高分 */
 
 int16_t Render_NoteAlignPx = 3;   /* 见 game_render.h 说明；设置界面可改 */
+
 
 static char numbuf[6];
 
@@ -62,6 +68,41 @@ static void draw_status(void)
     RTLCD_String(62, 0, numbuf, 0);
 }
 
+/* 长条宽度（居中在 16px 音符里） */
+#define REN_HOLD_W   6
+
+/* 画一段长条身体：竖直细条，夹在状态栏下沿与判定线之间。
+   ytop/ybot 是屏幕坐标（y 向下增大）。 */
+static void draw_hold_bar(int32_t x, int32_t ytop, int32_t ybot)
+{
+    int32_t x1 = x + (REN_NOTE_W - REN_HOLD_W) / 2;
+    if (ybot < REN_PLAY_TOP_Y) return;
+    if (ytop > REN_JUDGE_Y) return;
+    if (ytop < REN_PLAY_TOP_Y) ytop = REN_PLAY_TOP_Y;
+    if (ybot > REN_JUDGE_Y) ybot = REN_JUDGE_Y;
+    if (ybot < ytop) return;
+    RTLCD_FillRect((uint8_t)x1, (uint8_t)ytop,
+                   (uint8_t)(x1 + REN_HOLD_W - 1), (uint8_t)ybot, 1);
+}
+
+/* 已命中的长条：头部已经判过、从 head 之后不再遍历到，
+   所以单独按轨查询"尾巴结束时刻"，把还没走完的部分画出来。
+   尾巴过线后自动不画（判定层不管尾端，玩家松手也不受罚）。 */
+static void draw_hold_tails(void)
+{
+    uint32_t t = Play_SongTimeMs();
+    int32_t  speed = (int32_t)Play_SpeedPxPerS();
+    uint8_t  lane;
+    for (lane = 0; lane < 5u; lane++)
+    {
+        uint32_t tail = Judge_HoldTailMs(lane);
+        int32_t  ty;
+        if (!Judge_HoldActive(lane) || t >= tail) continue;
+        ty = REN_JUDGE_Y - (int32_t)(((int32_t)tail - (int32_t)t) * speed / 1000);
+        draw_hold_bar(REN_LANE_X(lane) + 2, ty, REN_JUDGE_Y);
+    }
+}
+
 static void draw_notes(void)
 {
     const Note *nt = Judge_Notes();
@@ -87,6 +128,11 @@ static void draw_notes(void)
         x  = REN_LANE_X(nt[i].lane) + 2;
         if (y > (int32_t)(RTLCD_H - REN_NOTE_H)) y = (int32_t)(RTLCD_H - REN_NOTE_H);
         if (nt[i].judged) continue;       /* 已判的不画（MISS/命中都消失） */
+        if (nt[i].hold_ms)                /* 长条：先画身体，再画头 */
+        {
+            int32_t ty = y - (int32_t)((uint32_t)nt[i].hold_ms * (uint32_t)speed / 1000u);
+            draw_hold_bar(x, ty, y + REN_NOTE_H - 1);
+        }
         {
             /* 顶部 8 px 是状态栏：音符从状态栏底下冒出。
                音符底边 < 状态栏底 → 整块还在状态栏内，不画（否则 FillRect 的
@@ -147,14 +193,23 @@ static void render_scene(uint8_t lanePressedBits)
     RTLCD_Clear();
     draw_status();
     draw_notes();
+    draw_hold_tails();
     draw_judgeline(lanePressedBits);
     draw_judgment();          /* 最后画，压在音符之上 */
 }
 
+/* 渲染耗时拆成两段，供遥测定位：绘制（纯 RAM 影子缓冲）与推屏（SPI 到 LCD）。 */
+volatile uint16_t Render_DrawUs    = 0;
+volatile uint16_t Render_PresentUs = 0;
+
 void Render_Frame(uint8_t lanePressedBits)
 {
+    uint32_t t0 = Time_NowUs();
     render_scene(lanePressedBits);
+    Render_DrawUs = (uint16_t)(Time_NowUs() - t0);
+    t0 = Time_NowUs();
     RTLCD_Present();
+    Render_PresentUs = (uint16_t)(Time_NowUs() - t0);
 }
 
 /* 暂停恢复倒计时：谱面冻结在暂停位置（songNow 未推进），
@@ -180,11 +235,18 @@ void Render_Resume(uint8_t lanePressedBits, uint32_t remainMs)
 void Render_Result(void)
 {
     char buf[8];
-    uint32_t sc = Judge_Score();
+    uint32_t sc   = Judge_Score();
+    uint32_t best = Save_BestScore(Play_ChartIndex());
     uint8_t  i;
 
     RTLCD_Clear();
-    RTLCD_String(27, 2, "RESULT", 0);
+    /* 标题三选一：破纪录 > 全连 > 普通结算（都是 6 或 10 字符，居中） */
+    if (Save_NewRecord())
+        RTLCD_String(21, 2, "NEW RECORD", 0);
+    else if (Judge_FullCombo())
+        RTLCD_String(21, 2, "FULL COMBO", 0);
+    else
+        RTLCD_String(27, 2, "RESULT", 0);
 
     for (i = 0; i < 5; i++) { buf[4-i] = (char)('0' + (uint8_t)(sc % 10)); sc /= 10; }
     buf[5] = 0;
@@ -202,31 +264,51 @@ void Render_Result(void)
             row[4] = (char)('0' + (v / 10) % 10);
             row[5] = (char)('0' + v % 10);
             row[6] = 0;
-            RTLCD_String(0, (uint8_t)(34 + i * 8), row, 0);
+            RTLCD_String(0, (uint8_t)(32 + i * 8), row, 0);
         }
-        if (Judge_FullCombo()) {
-            RTLCD_String(48, 50, "FULL", 0);
-            RTLCD_String(48, 58, "COMBO", 0);
-        }
-        else
-        {
+        {   /* 右列：MAX 连击 + 该曲历史最高分 */
             char mc[10] = "MAX:000";
+            char bc[12];
             uint16_t v = Judge_MaxCombo();
+            uint32_t bs = best;
+
             mc[4] = (char)('0' + (v / 100) % 10);
             mc[5] = (char)('0' + (v / 10) % 10);
             mc[6] = (char)('0' + v % 10);
-            RTLCD_String(48, 58, mc, 0);
+            RTLCD_String(48, 48, mc, 0);
+
+            bc[0] = 'B'; bc[1] = 'S'; bc[2] = 'T'; bc[3] = ':';
+            for (i = 0; i < 5; i++) { bc[8 - i] = (char)('0' + (uint8_t)(bs % 10)); bs /= 10; }
+            bc[9] = 0;
+            RTLCD_String(48, 56, bc, 0);
         }
     }
     RTLCD_Present();
 }
 
+void Render_Boot(const char *usbTxt, uint16_t tick)
+{
+    char b[8];
+    uint8_t i;
+
+    RTLCD_Clear();
+    RTLCD_String(15, 6, "5K RHYTHM", 0);
+    RTLCD_String(6, 20, "Press any key", 0);
+    if (usbTxt) RTLCD_String(6, 34, usbTxt, 0);
+
+    /* 心跳：每 100 ms 变一次。数字不动说明主循环没在推进。 */
+    b[0] = 't'; b[1] = '=';
+    for (i = 0; i < 4; i++) b[2 + i] = (char)('0' + (tick / (uint16_t)(i == 0 ? 1000 : (i == 1 ? 100 : (i == 2 ? 10 : 1)))) % 10);
+    b[6] = 0;
+    RTLCD_String(6, 48, b, 0);
+
+    RTLCD_Present();
+}
+
+/* 兼容旧调用点（菜单回主界面等处） */
 void Render_DemoIdle(void)
 {
-    RTLCD_Clear();
-    RTLCD_String(15, 8, "5K RHYTHM", 0);
-    RTLCD_String(6, 22, "Press any key", 0);
-    RTLCD_Present();
+    Render_Boot(0, 0);
 }
 
 void Render_Calibration(const uint16_t *delta, const uint16_t *thr)
@@ -272,7 +354,9 @@ void Render_Init(void)
 void Render_MainMenu(uint8_t selected)
 {
     uint8_t i;
-    static const char *const names[3] = { "Easy 120", "Normal 136", "Hard 150" };
+    /* 曲名不放 BPM：原来 "2. Normal 136" 长达 13 字符(78px)，
+       再在 x=66 画最高分会直接压到名字上、溢出到屏幕外。 */
+    static const char *const names[3] = { "Easy", "Normal", "Hard" };
     char line[16];
     RTLCD_Clear();
     RTLCD_String(0, 0, "SELECT SONG", 0);
@@ -280,14 +364,29 @@ void Render_MainMenu(uint8_t selected)
     {
         line[0] = (char)('0' + i + 1);
         line[1] = '.';
-        line[2] = ' ';
-        line[3] = 0;
+        line[2] = 0;
         {
             int8_t k;
-            for (k = 0; names[i][k] && k < 12; k++) line[3 + k] = names[i][k];
-            line[3 + k] = 0;
+            for (k = 0; names[i][k] && k < 8; k++) line[2 + k] = names[i][k];
+            line[2 + k] = 0;
         }
         RTLCD_String(0, (uint8_t)(16 + i * 12), line, (uint8_t)(i == selected));
+
+        {   /* 历史最高分：没打过显示 ----- */
+            char sb[8];
+            uint32_t bs = Save_BestScore(i);
+            uint8_t k;
+            if (bs == 0)
+            {
+                sb[0] = '-'; sb[1] = '-'; sb[2] = '-'; sb[3] = '-'; sb[4] = '-'; sb[5] = 0;
+            }
+            else
+            {
+                for (k = 0; k < 5; k++) { sb[4 - k] = (char)('0' + (uint8_t)(bs % 10)); bs /= 10; }
+                sb[5] = 0;
+            }
+            RTLCD_String(72, (uint8_t)(16 + i * 12), sb, (uint8_t)(i == selected));
+        }
     }
     RTLCD_String(0, 48, "Whl:song  S2:go", 0);
     RTLCD_String(0, 56, "S1hold:SETTINGS", 0);
@@ -332,36 +431,69 @@ void Render_Paused(void)
    标定方法：跑一局 → 看 dt avg → 把 OFF 调到 -dt avg（步 5）→ 再跑一局确认接近 0。 */
 void Render_Settings(uint8_t sel)
 {
-    static const char *const names[4] = { "OFF", "ALN", "SPD", "WIN" };
+    static const char *const names[7] = { "OFF", "ALN", "SPD", "WIN", "USB", "SENS", "CLR" };
     char b[10];
     uint8_t i;
 
     RTLCD_Clear();
     RTLCD_String(0, 0, "SETTINGS", 0);
+    {   /* dt 均值挪到标题行右侧，给第 7 项腾出空间 */
+        fmt_i16(b, (int16_t)Judge_DtMeanMs(), 3);
+        RTLCD_String(60, 0, "dt", 0);
+        RTLCD_String(72, 0, b, 0);
+    }
 
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 7; i++)
     {
-        uint8_t y = (uint8_t)(10 + i * 9);
+        uint8_t y = (uint8_t)(8 + i * 8);        /* 8..56，7 行 */
         b[0] = (i == sel) ? '>' : ' ';
         b[1] = 0;
         RTLCD_String(0, y, b, 0);
         RTLCD_String(6, y, names[i], 0);
 
-        switch (i)
+        if (i == 4)                              /* USB：显示 ON/OFF 而非数字 */
         {
-        case 0:  fmt_i16(b, (int16_t)JDG_OFFSET_MS, 3);      break;
-        case 1:  fmt_i16(b, Render_NoteAlignPx, 2);          break;
-        case 2:  fmt_i16(b, (int16_t)Play_SpeedPxPerS(), 3); break;
-        default: fmt_i16(b, (int16_t)JDG_WIN_PERFECT, 2);    break;
+            RTLCD_String(42, y, Usb_IsInited() ? "ON" : "OFF", 0);
         }
-        RTLCD_String(42, y, b, 0);
+        else if (i == 5)                         /* 灵敏度：百分比 */
+        {
+            fmt_i16(b, (int16_t)Touch_SensPct, 3);
+            RTLCD_String(42, y, b, 0);
+            RTLCD_String(66, y, "%", 0);
+        }
+        else if (i == 6)                         /* 清空记录：按 S2 执行 */
+        {
+            RTLCD_String(38, y, "S2:wipe", 0);
+        }
+        else
+        {
+            switch (i)
+            {
+            case 0:  fmt_i16(b, (int16_t)JDG_OFFSET_MS, 3);      break;
+            case 1:  fmt_i16(b, Render_NoteAlignPx, 2);          break;
+            case 2:  fmt_i16(b, (int16_t)Play_SpeedPxPerS(), 3); break;
+            default: fmt_i16(b, (int16_t)JDG_WIN_PERFECT, 2);    break;
+            }
+            RTLCD_String(42, y, b, 0);
+        }
     }
 
-    RTLCD_String(0, 46, "dt avg", 0);
-    fmt_i16(b, (int16_t)Judge_DtMeanMs(), 3);
-    RTLCD_String(48, 46, b, 0);
-    RTLCD_String(72, 46, "ms", 0);
+    RTLCD_Present();
+}
 
-    RTLCD_String(0, 55, "Whl:item S1- S2+", 0);
+
+/* USB 枚举等待页 */
+void Render_UsbWait(const char *usbTxt, uint16_t tenthSec)
+{
+    char b[8];
+    RTLCD_Clear();
+    RTLCD_String(18, 8, "USB ENUM", 0);
+    if (usbTxt) RTLCD_String(6, 24, usbTxt, 0);
+    b[0] = (char)('0' + (tenthSec / 10) % 10);
+    b[1] = '.';
+    b[2] = (char)('0' + tenthSec % 10);
+    b[3] = 's'; b[4] = 0;
+    RTLCD_String(36, 40, b, 0);
+    RTLCD_String(6, 54, "S1hold:cancel", 0);
     RTLCD_Present();
 }

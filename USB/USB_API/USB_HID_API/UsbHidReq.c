@@ -38,7 +38,13 @@ VOID usbGetHidDescriptor(VOID)
     }
     usbClearOEP0ByteCount();
     wBytesRemainingOnIEP0 = 9;
+#if (HID_NUM_INTERFACES > 0)
     usbSendDataPacketOnEP0((PBYTE)&abromConfigurationDescriptorGroup.stHid[intfNum].blength_hid_descriptor);
+#else
+    /* 本工程描述符已裁掉 HID 接口：结构体里没有 stHid 成员。
+       这里 STALL，主机不会走到（接口都不存在），只为让链接通过。 */
+    usbStallOEP0();
+#endif
     intfNum++;
 }
 

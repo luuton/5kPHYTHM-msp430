@@ -26,7 +26,11 @@ extern void Menu_Update(const MenuEvents *ev, uint32_t nowMs);
 /* 当前选中的曲目 index（Play_Start 用） */
 extern uint8_t Menu_SelectedChart(void);
 
-/* 设置界面的光标项（0..3），供渲染层使用 */
+/* USB 枚举等待：主循环每帧调用。返回 1 = 仍在等待（此时应暂停触摸扫描与渲染） */
+extern uint8_t  Menu_UsbWaitTick(void);
+extern uint16_t Menu_UsbWaitTenths(void);
+
+/* 设置界面的光标项（0..4），供渲染层使用 */
 extern uint8_t Menu_SettingsSel(void);
 
 /* 菜单状态 */

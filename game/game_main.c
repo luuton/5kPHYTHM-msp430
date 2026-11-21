@@ -29,11 +29,24 @@
 #include "game_chart.h"
 #include "game_telem.h"
 #include "game_save.h"
+#include "game_usb.h"
 
-/* 固件版本 tag：每次改动行为后往上带一位，随遥测横幅输出。
-   用途：分析串口日志时能确定"这份 log 烧的是哪版固件"。
-   （本工程曾因无法分辨固件版本，把建模建立在错误基线上。） */
-#define FW_TAG          "5k-r7"
+#define FW_TAG          "5k-r62"
+
+/* ============================================================================
+   隔离测试开关：1 = 开机只跑 USB，不初始化 CTS/按键/旋钮/TA0，
+   也不进入游戏主循环。
+
+   目的：LAB4 在同样的板子/线/口上能枚举，本工程不能。两者差异只剩
+   "初始化了什么、主循环在做什么"。把游戏侧全部摘掉后：
+     · 若能枚举  → 是 CTS/渲染/按键初始化或主循环干扰（几百 ms 的
+                   D+ 上升沿窗口被抢占，或某外设改动了共享寄存器）
+     · 若仍不能 → 是 USB 初始化本身（描述符 / msc_Init 缺失 / 端点配置）
+   测完请改回 0。
+   ============================================================================ */
+#ifndef USB_STANDALONE_TEST
+#define USB_STANDALONE_TEST   0
+#endif
 
 #define FRAME_MS        16u          /* 60 fps */
 #define SCAN_BUDGET_MS  4u           /* 阶段 1 上限（E0.2 实测调整） */
@@ -46,6 +59,11 @@ static uint16_t  tScanMin = 0xFFFF, tScanMax = 0, tScanAvg = 0;
 static uint16_t  tScanN = 0;
 static uint32_t  tScanSumUs = 0;
 static uint16_t  tWorstFrame = 0;
+static uint16_t  tBodyMax  = 0;   /* 每秒内：帧体（从帧开始到开始等待）最长 ms */
+static uint16_t  tRenderMax = 0;  /* 每秒内：渲染阶段最长 us */
+static uint16_t  tDrawMax = 0, tPresMax = 0;   /* 每秒内：绘制/推屏最长 us */
+static uint16_t  tDeltaMin[5] = {0xFFFF,0xFFFF,0xFFFF,0xFFFF,0xFFFF};
+static uint16_t  tDeltaMax[5] = {0,0,0,0,0};
 static uint32_t  tStatAtMs = 0;
 static uint8_t   pressed[5];
 static uint8_t   pressedPrev;
@@ -63,17 +81,100 @@ static void u16toDec(uint16_t v, char *b)
     b[5] = 0;
 }
 
+/* 一个扫描窗口：从 frameStart 起一直扫到 deadlineMs（帧内相对时刻）。
+   时间戳取每次扫描的中点，与渲染帧率解耦。 */
+static void scan_window(uint32_t frameStart, uint32_t deadlineMs)
+{
+    while (Time_NowMs() - frameStart < deadlineMs)
+    {
+        uint32_t t0 = Time_NowMs();
+        uint8_t  hit;
+        uint32_t mid;
+        uint32_t scanUs;
+        {
+            uint32_t us0 = Time_NowUs();
+            hit = Touch_Scan(delta, pressed);
+            scanUs = Time_NowUs() - us0;              /* µs */
+        }
+        mid = t0 + (Time_NowMs() - t0) / 2u;
+        /* 扫描耗时统计 */
+        if ((uint16_t)scanUs < tScanMin) tScanMin = (uint16_t)scanUs;
+        if ((uint16_t)scanUs > tScanMax) tScanMax = (uint16_t)scanUs;
+        tScanSumUs += scanUs;
+        tScanN++;
+
+        /* 长条尾判需要"松开"这个边沿，单独取一份 */
+        {
+            uint8_t rel = (uint8_t)(pressedPrev & (uint8_t)~hit);
+            edgesNow = (uint8_t)(hit & (uint8_t)~pressedPrev);
+            pressedPrev = hit;
+
+            /* 先查"到尾时是否还按着"，再处理松手与按下 */
+            Play_HoldTick(mid, hit, delta);
+            {
+                uint8_t lane;
+                for (lane = 0; lane < 5; lane++)
+                    if (rel & (1u << lane))
+                        Play_HoldRelease(lane, mid, delta);
+            }
+        }
+
+        {   /* delta 区间统计（不管是否判为按下） */
+            uint8_t ln;
+            for (ln = 0; ln < 5; ln++)
+            {
+                if (delta[ln] < tDeltaMin[ln]) tDeltaMin[ln] = delta[ln];
+                if (delta[ln] > tDeltaMax[ln]) tDeltaMax[ln] = delta[ln];
+            }
+        }
+
+        {
+            uint8_t lane;
+            for (lane = 0; lane < 5; lane++)
+                if (edgesNow & (1u << lane))
+                {
+                    Play_Tap(lane, mid, delta);
+                }
+        }
+    }
+}
+
 /* ------------------------ 主循环（不返回） ------------------------ */
 void Game5K_Run(void)
 {
     uint32_t frameStart;
 
-    Telem_Init();                            /* 先起串口，后面所有日志可发 */
+#if USB_STANDALONE_TEST
+    /* ---- 隔离模式：只做 USB ---- */
+    {
+        uint16_t tick = 0;
+        RTLCD_Init();          /* LCD 已由 LAB1main 初始化，这里只建影子缓冲 */
+        Telem_Init();
+        Usb_Init();
+        while (1)
+        {
+            Usb_Poll();
+            Render_Boot(Usb_StateStr(), tick++);
+            __delay_cycles(25000UL * 16UL);   /* 约 16 ms（MCLK 24.97 MHz） */
+        }
+    }
+#endif
+
+    Telem_Init();                            /* 后端初始化（USB 模式下为空操作） */
+    /* USB 不在开机时初始化。
+       参照 LAB4 的做法：先让系统完全跑起来，由用户主动打开
+       （主菜单 S1 长按 -> 设置界面 -> 选到 USB -> S2 加到 ON）。
+       好处是 USB 启动时时钟/电源已稳定，且 D+ 上拉后的枚举窗口
+       不会被开机初期的一堆初始化占用。 */
+
     Save_LoadSettings();                     /* 读回掉电保持的设置（在横幅之前，
                                                 这样 V 行报的就是实际生效的参数） */
+    /* 开机横幅：记录本固件的可调参数。
+       USB 模式下此时可能还没枚举完，Telem 内部会挂起并在 ready 后补发
+       （见 Telem_Flush 里的待发逻辑），不会丢。 */
     Telem_Version(FW_TAG, Play_SpeedPxPerS(), Render_NoteAlignPx,
                   JDG_WIN_PERFECT, JDG_WIN_GREAT, JDG_WIN_GOOD,
-                  Touch_Thresholds);         /* 开机横幅：记录本固件的可调参数 */
+                  Touch_Thresholds);
     Touch_Init(8);
     RTLCD_Init();
     Menu_Init();
@@ -89,37 +190,33 @@ void Game5K_Run(void)
         frameStart = Time_NowMs();
         edgesNow = 0;
 
-        /* -- 阶段 1：触摸扫描窗口（时间戳 = 扫描中点） -- */
-        while (Time_NowMs() - frameStart < SCAN_BUDGET_MS)
+        /* -- USB 枚举等待：把 CPU 完全让给 USB --
+           D+ 上拉后主机要连续做几十个 EP0 事务（几百 ms）。本工程每帧有
+           4 ms 触摸扫描 + 整屏推屏（每次关中断 340 µs × 8），任何一次撞上
+           都会让某个 EP0 事务超时 —— 实测表现为枚举随机卡在设备描述符或
+           某个字符串描述符上。LAB4 能成功，正是因为它这段主循环什么都不做。
+           这里复制该行为：不扫描、不渲染游戏，进度页只在秒数变化时才推屏
+           （同样是为了避免推屏关中断）。 */
+        if (Menu_UsbWaitTick())
         {
-            uint32_t t0 = Time_NowMs();
-            uint8_t  hit;
-            uint32_t mid;
-            uint32_t scanUs;
-            {
-                uint32_t us0 = Time_NowUs();
-                hit = Touch_Scan(delta, pressed);
-                scanUs = Time_NowUs() - us0;              /* µs */
-            }
-            mid = t0 + (Time_NowMs() - t0) / 2u;
-            /* 扫描耗时统计 */
-            if ((uint16_t)scanUs < tScanMin) tScanMin = (uint16_t)scanUs;
-            if ((uint16_t)scanUs > tScanMax) tScanMax = (uint16_t)scanUs;
-            tScanSumUs += scanUs;
-            tScanN++;
+            static uint16_t lastTenth = 0xFFFFu;
+            uint16_t tenth = Menu_UsbWaitTenths();
 
-            edgesNow = (uint8_t)(hit & (uint8_t)~pressedPrev);
-            pressedPrev = hit;
+            Usb_Poll();
+            Menu_ScanEvents(&me, frameStart);
+            Menu_Update(&me, frameStart);          /* 处理 S1 长按取消 */
 
+            if (tenth != lastTenth)
             {
-                uint8_t lane;
-                for (lane = 0; lane < 5; lane++)
-                    if (edgesNow & (1u << lane))
-                    {
-                        Play_Tap(lane, mid);
-                    }
+                lastTenth = tenth;
+                Render_UsbWait(Usb_StateStr(), tenth);
             }
+            while (Time_NowMs() - frameStart < FRAME_MS) ;
+            continue;
         }
+
+        /* -- 阶段 1：触摸扫描窗口（时间戳 = 扫描中点） -- */
+        scan_window(frameStart, SCAN_BUDGET_MS);
 
         /* -- 阶段 1.5：按住即亮 + 遥测出队（都在扫描窗口之外，不污染采样率） -- */
         {
@@ -131,6 +228,7 @@ void Game5K_Run(void)
             Board_ledOn(mask);
         }
         Telem_Flush();
+        Usb_Poll();                              /* 非阻塞，几微秒 */
 
         /* -- 阶段 5：菜单键轮询 + 状态机 -- */
         Menu_ScanEvents(&me, frameStart);
@@ -139,6 +237,7 @@ void Game5K_Run(void)
 
         /* -- 阶段 2/3/4：按菜单屏幕选择渲染内容 -- */
         {
+            uint32_t r0 = Time_NowUs();
             uint8_t st = Menu_Screen();
             switch (st)
             {
@@ -171,26 +270,57 @@ void Game5K_Run(void)
             case 5:  /* M_SETTINGS */
                 Render_Settings(Menu_SettingsSel());
                 break;
-            default: /* M_LOGO */
-                break;    /* logo 仍在屏上 */
+            default: /* M_LOGO：每帧刷新，USB 状态与心跳都可见 */
+                Render_Boot(Usb_StateStr(), (uint16_t)(frameStart / 100u));
+                break;
+            }
+            {
+                uint32_t rUs = Time_NowUs() - r0;
+                if ((uint16_t)rUs > tRenderMax) tRenderMax = (uint16_t)rUs;
             }
         }
+
+        /* -- 阶段 5.5：把本帧剩余的空闲时间也用于扫描 --
+           原来每帧只在前 4 ms 采样，剩下十几毫秒是输入盲区：落在盲区里的
+           一次按压要等到下一帧才被记录（最多晚一整帧）。现在把渲染后的空闲
+           时间也用来扫描，盲区从约 12 ms 缩到约 3 ms。 */
+        {   /* 帧体耗时：到这里渲染已完成，剩余时间是纯空闲 */
+            uint32_t bodyMs = Time_NowMs() - frameStart;
+            if ((uint16_t)bodyMs > tBodyMax) tBodyMax = (uint16_t)bodyMs;
+            if (Render_DrawUs    > tDrawMax) tDrawMax = Render_DrawUs;
+            if (Render_PresentUs > tPresMax) tPresMax = Render_PresentUs;
+        }
+        scan_window(frameStart, FRAME_MS - 3u);
 
         /* -- 阶段 6：帧对齐 -- */
         while (Time_NowMs() - frameStart < FRAME_MS) ;
         {
             uint32_t frameMs = Time_NowMs() - frameStart;
             if ((uint16_t)frameMs > tWorstFrame) tWorstFrame = (uint16_t)frameMs;
+            if (frameMs > 500u) Telem_Stall(frameMs, Time_NowMs());
 
             /* 每秒输出一行帧/扫描统计 */
             if (frameStart - tStatAtMs >= 1000u)
             {
                 tScanAvg = tScanN ? (uint16_t)(tScanSumUs / tScanN) : 0;
-                Telem_FrameStats(tWorstFrame,
+                Telem_FrameStats(tWorstFrame, tBodyMax, tRenderMax,
                                  tScanN ? tScanMin : 0, tScanAvg,
-                                 tScanN ? tScanMax : 0);
-                tWorstFrame = 0;
+                                 tScanN ? tScanMax : 0,
+                                 tDrawMax, tPresMax);
+                /* 独立时钟对照：游戏计时秒数 vs RTC 秒数（ACLK 32.768k 驱动） */
+                if (RTCCTL01 & RTCRDY) Telem_Clock(frameStart / 1000u, RTCSEC);
+                Telem_DeltaRange(tDeltaMin, tDeltaMax);
+                /* 演奏中额外打一行状态：用来追"铺面消失"这类问题 */
+                if (Menu_Screen() == 2u)   /* M_PLAY */
+                    Telem_Play((uint8_t)Play_State(), Play_SongTimeMs(),
+                               Judge_Head(), Judge_NoteCount());
+                tWorstFrame = 0; tBodyMax = 0; tRenderMax = 0; tDrawMax = 0; tPresMax = 0;
                 tScanMin = 0xFFFF; tScanMax = 0; tScanSumUs = 0; tScanN = 0;
+                {
+                    uint8_t ln;
+                    for (ln = 0; ln < 5; ln++)
+                    { tDeltaMin[ln] = 0xFFFF; tDeltaMax[ln] = 0; }
+                }
                 tStatAtMs = frameStart;
             }
         }

@@ -28,8 +28,14 @@ extern int16_t Render_NoteAlignPx;
 #define REN_PLAY_TOP_Y      8      /* 下落区顶（避开状态栏） */
 
 extern void Render_Init(void);
-extern void Render_Frame(uint8_t lanePressedBits);    /* 每帧主循环调用 */
-extern void Render_DemoIdle(void);                    /* 主菜单背景 */
+extern void Render_Frame(uint8_t lanePressedBits);
+/* 上一帧渲染耗时（us）：draw=绘制影子缓冲, present=SPI 推屏 */
+extern volatile uint16_t Render_DrawUs, Render_PresentUs;    /* 每帧主循环调用 */
+extern void Render_DemoIdle(void);                    /* LOGO 页（静态，兼容旧调用） */
+
+/* 开机 LOGO 页（每帧刷新）：usbTxt 为 USB 状态短文本，tick 为递增心跳。
+   心跳数字不变 = 主循环没有推进，可据此区分"卡死"与"只是按键没反应"。 */
+extern void Render_Boot(const char *usbTxt, uint16_t tick);
 
 /* 调试画面：5 路 delta 柱状图 + 阈值（P3 标定用） */
 extern void Render_Calibration(const uint16_t *delta, const uint16_t *thr);
@@ -46,7 +52,12 @@ extern void Render_Paused(void);
 /* 暂停恢复倒计时：画面显示冻结的谱面 + 居中大号倒计时数字 */
 extern void Render_Resume(uint8_t lanePressedBits, uint32_t remainMs);
 
-/* 设置界面（sel = 当前光标项 0..3） */
+/* USB 枚举等待页：显示状态与已等待秒数。此页存在期间主循环不扫描触摸、
+   不推游戏画面，把 CPU 全部让给 USB 枚举（LAB4 就是这么做的）。 */
+extern void Render_UsbWait(const char *usbTxt, uint16_t tenthSec);
+
+
+/* 设置界面（sel = 当前光标项 0..4） */
 extern void Render_Settings(uint8_t sel);
 
 /* 结算页 */

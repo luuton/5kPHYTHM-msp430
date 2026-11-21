@@ -13,6 +13,11 @@ extern const struct Sensor keys5;
 /* 运行时可改的逐路阈值（HAL element.threshold 是 const，不能改） */
 extern uint16_t Touch_Thresholds[5];
 
+/* 灵敏度倍率（%）：实际阈值 = Touch_Thresholds[i] * Touch_SensPct / 100。
+   100 = 源码默认；越小越灵敏，越大越不容易被隔壁焊盘误触。
+   设置界面实时可调，并随其它参数一起持久化。 */
+extern uint16_t Touch_SensPct;
+
 /* 初始化：建基线。必须在 Board_init() 之后调用；loops=建议 8 */
 extern void Touch_Init(uint8_t loops);
 

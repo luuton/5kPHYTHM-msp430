@@ -8,17 +8,28 @@
 
 #include <stdint.h>
 
-#define CH_MAX_NOTES   160            /* v1: 单首谱面音符上限（RAM 镜像 8 B/个 = 1.25 KB） */
+/* ⚠ 必须覆盖最长的谱面：easy=88 / normal=250 / hard=412。
+   原来写 160 会把 normal 截掉 36%、hard 截掉 61% —— 表现就是
+"打着打着铺面没了"（后面根本没有音符可放，长时间只有空轨道）。
+   音符结构已压缩到 4 B/个，416 个 = 1664 B，比原来的 160x8B 只多 384 B。 */
+#define CH_MAX_NOTES   416
 #define CH_LANES       5
 
 typedef struct {
-    uint32_t t_ms;      /* 到达判定线的时刻（相对歌曲开始） */
+    uint16_t t_ms;      /* 到达判定线的时刻（ms）。谱面最长 50 s，uint16 足够 */
     uint8_t  lane;      /* 0..4 */
-    uint8_t  speed;     /* 保留：落速倍率（v1 恒 1） */
-    uint8_t  judged;    /* 运行时状态：0=未判 1=已判 */
-    uint8_t  result;    /* 运行时状态：JudgeResult */
-    uint8_t  pad[2];
-} Note;                 /* 8 字节，自然对齐 */
+    uint8_t  speed  : 2;/* 保留：落速倍率（v1 恒 1） */
+    uint8_t  judged : 1;/* 运行时状态：0=未判 1=已判 */
+    uint8_t  result : 3;/* 运行时状态：JudgeResult（0..5） */
+    uint16_t hold_ms;   /* 长条长度（ms）；0 = 普通单点音符。
+                           注意：长条只有"头判"，尾端不判定 —— 到时间尾巴
+                           自然消失，玩家松手不受惩罚（需求如此）。
+                           放在结构末尾是为了让谱面里已有的 5 个初始化值
+                           自动补 0，不必改动所有行。 */
+} Note;                 /* 6 字节 */
+
+/* 编译期断言：结构一旦被改回更大的布局，这里立刻报错，避免 RAM 无声膨胀 */
+typedef char _note_size_check[(sizeof(Note) == 6) ? 1 : -1];
 
 typedef struct {
     const char   *title;

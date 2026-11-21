@@ -45,11 +45,26 @@ BYTE USB_handleClockEvent()
 If this function gets executed, it indicates that a valid voltage has just been applied to the VBUS pin.
 returns TRUE to keep CPU awake
 */
+/* 由 game/game_usb.c 提供：XT2 是否已起振并稳定 */
+extern unsigned char Usb_Xt2Ready(void);
+
 BYTE USB_handleVbusOnEvent()
 {
-    //TO DO: You can place your code here
+    /* ⚠ 原厂实现直接调 USB_enable()，而 USB_enable() 内部用死等版
+       XT2_Start()（while (SFRIFG1 & OFIFG)）。
+       XT2 不起振时，VBUS 中断每触发一次就把 CPU 卡死在这里，
+       整机失去响应 —— 本项目实测"卡在 LOGO 屏、按键无反应"即由此而来。
 
-    //We switch on USB and connect to the BUS
+       因此先确认 XT2 就绪再往下走；未就绪就只跳过本次连接，
+       由 game_usb 的 Usb_Init() 在开机时统一判定。 */
+    if (!Usb_Xt2Ready())
+        return TRUE;
+
+    /* 再查一次晶振故障标志：USB_enable() 内部用死等版 XT2_Start()，
+       若此刻 OFIFG 仍置位（XT1/XT2 有故障），调用它会卡死在这个中断里。 */
+    if (SFRIFG1 & OFIFG)
+        return TRUE;
+
     if (USB_enable() == kUSB_succeed)
     {
         USB_reset();
@@ -75,8 +90,10 @@ returns TRUE to keep CPU awake
 */
 BYTE USB_handleResetEvent()
 {
-    //TO DO: You can place your code here
-
+    /* ⚠ 这里曾经调用 Usb_MaskUnusedEndpoints() 去 STALL MSC/HID 端点。
+       但描述符已恢复为完整的 MSC+HID+CDC，主机枚举前先发 USB reset，
+       重置后若把这两个端点 STALL，主机探测接口时就会失败。
+       描述符与端点行为必须一致：描述符声明了接口，端点就不能 STALL。 */
     return TRUE;
 }
 

@@ -59,6 +59,7 @@
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_API/USB_CDC_API}"/>
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_API/USB_Common}"/>
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_API/USB_HID_API}"/>
+                                    <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_API/USB_MSC_API}"/>
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_User}"/>
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_API}"/>
                                     <listOptionValue value="${workspace_loc:/${ProjName}/USB/USB_config}"/>
@@ -102,7 +103,7 @@
                         </toolChain>
                     </folderInfo>
                     <sourceEntries>
-                        <entry excluding="rts430xl.lib|MSP-EXP430F5529_UE.lib|Lab4.c|temp.c|UserExperienceDemo/Puzzle/Puzzle.c|UserExperienceDemo/Puzzle/fsm.c|UserExperienceDemo/Puzzle/fsm_transition.c|FatFs/option/syscall.c|FatFs/option/ccsbcs.c|FatFs/option/cc950.c|FatFs/option/cc949.c|FatFs/option/cc936.c|FatFs/option/cc932.c|UserExperienceDemo/Settings.c|UserExperienceDemo/SDCard.c|UserExperienceDemo/Random.c|UserExperienceDemo/PowerTest.c|UserExperienceDemo/PMM.c|UserExperienceDemo/Mouse.c|UserExperienceDemo/MenuGames.c|UserExperienceDemo/MassStorageCommon.c|UserExperienceDemo/MassStorage.c|UserExperienceDemo/LPM.c|UserExperienceDemo/EchoUsb.c|UserExperienceDemo/DemoApps.c|UserExperienceDemo/Demo_Cube.c|UserExperienceDemo/Clock.c|UserExperienceDemo/5xx_ACTIVE_test.s43|UserExperienceDemo/5xx_ACTIVE_test.asm" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                        <entry excluding="rts430xl.lib|MSP-EXP430F5529_UE.lib|Lab4.c|temp.c|UserExperienceDemo/Puzzle/Puzzle.c|UserExperienceDemo/Puzzle/fsm.c|UserExperienceDemo/Puzzle/fsm_transition.c|FatFs/option/syscall.c|FatFs/option/ccsbcs.c|FatFs/option/cc950.c|FatFs/option/cc949.c|FatFs/option/cc936.c|FatFs/option/cc932.c|UserExperienceDemo/Settings.c|UserExperienceDemo/SDCard.c|UserExperienceDemo/Random.c|UserExperienceDemo/PowerTest.c|UserExperienceDemo/PMM.c|UserExperienceDemo/Mouse.c|UserExperienceDemo/MenuGames.c|UserExperienceDemo/LPM.c|UserExperienceDemo/EchoUsb.c|UserExperienceDemo/DemoApps.c|UserExperienceDemo/Demo_Cube.c|UserExperienceDemo/Clock.c|UserExperienceDemo/5xx_ACTIVE_test.s43|UserExperienceDemo/5xx_ACTIVE_test.asm|*.obj|*.d" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
                     </sourceEntries>
                 </configuration>
             </storageModule>

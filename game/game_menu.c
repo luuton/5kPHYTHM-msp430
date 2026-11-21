@@ -22,10 +22,12 @@
 #include "game_chart.h"
 #include "game_render.h"
 #include "game_telem.h"
+#include "game_usb.h"
 #include "game_touch.h"
 #include "game_save.h"
 
-enum { M_LOGO = 0, M_MAIN = 1, M_PLAY = 2, M_PAUSE = 3, M_RESULT = 4, M_SETTINGS = 5 };
+enum { M_LOGO = 0, M_MAIN = 1, M_PLAY = 2, M_PAUSE = 3, M_RESULT = 4,
+       M_SETTINGS = 5, M_USBWAIT = 6 };
 
 #define MENU_LONG_MS   600u
 #define MENU_DB_FRAMES 3u          /* 3 帧连续同状态才算 */
@@ -38,11 +40,52 @@ static uint8_t  s1Down, s2Down;    /* 消抖后的稳定按下状态 */
 static uint32_t s1DownAtMs, s2DownAtMs;
 static uint32_t resultShownAt;
 static uint16_t wheelLast = 0xFFFF;      /* 上次滚轮值（0xFFFF=未初始化） */
-static uint8_t  setSel = 0;              /* 设置界面光标项 0..3 */
+static uint8_t  setSel = 0;              /* 设置界面光标项 0..4 */
+static uint16_t usbWaitTicks = 0;        /* USB 枚举等待计时（帧数，60fps） */
 
 uint8_t Menu_Screen(void)         { return screen; }
 uint8_t Menu_SelectedChart(void)  { return selected; }
 uint8_t Menu_SettingsSel(void)    { return setSel; }
+
+/* USB 枚举等待：由主循环每帧调用，返回 1 表示仍在等待 */
+uint8_t Menu_UsbWaitTick(void)
+{
+    static uint16_t readyTicks = 0;
+
+    if (screen != M_USBWAIT) { readyTicks = 0; return 0; }
+    usbWaitTicks++;
+
+    if (Usb_IsReady())
+    {
+        /* ⚠ 枚举完成不等于可以用：Windows 之后还要加载 usbser.sys 并做
+           接口初始化（GET_LINE_COOKING / SET_CONTROL_LINE_STATE 等）。
+           之前一到 ready 就退出等待模式，主循环立刻恢复 CTS 扫描与整屏推屏
+           （每次关中断 340 µs × 8），正好把驱动初始化打断 ——
+           主机于是 reset 重枚举，第二次失败，表现为
+           "代码 43 / 请求 USB 设备描述符失败"，而诊断页里 tSetupPacket
+           还留着成功枚举时那条 GET_LINE_CODING。
+           这里再多留 3 秒空闲，让驱动初始化走完。 */
+        if (++readyTicks > 180u)
+        {
+            screen = M_SETTINGS;
+            readyTicks = 0;
+            return 0;
+        }
+    }
+    else
+    {
+        readyTicks = 0;
+    }
+
+    if (usbWaitTicks > 600u)          /* 总超时 10 s */
+    {
+        screen = M_SETTINGS;
+        readyTicks = 0;
+        return 0;
+    }
+    return 1;
+}
+uint16_t Menu_UsbWaitTenths(void) { return (uint16_t)(usbWaitTicks / 6u); }
 
 
 
@@ -199,7 +242,7 @@ void Menu_Update(const MenuEvents *ev, uint32_t nowMs)
            值域与步进见 Render_Settings 注释。 */
         {
             int8_t d = wheel_delta();
-            if (d) setSel = (uint8_t)clamp_i32((int32_t)setSel + d, 0, 3);
+            if (d) setSel = (uint8_t)clamp_i32((int32_t)setSel + d, 0, 6);
         }
         {
             int8_t  dir = 0;
@@ -219,13 +262,43 @@ void Menu_Update(const MenuEvents *ev, uint32_t nowMs)
                     Play_SetSpeedPxPerS((uint16_t)clamp_i32(
                         (int32_t)Play_SpeedPxPerS() + dir * 10, 40, 120));
                     break;
-                default: /* PERFECT 窗口 ms，步 5；GREAT/GOOD 按 1:2:10/3 联动 */
+                case 3:  /* PERFECT 窗口 ms，步 5；GREAT/GOOD 按 1:2:10/3 联动 */
                     JDG_WIN_PERFECT = clamp_i32(JDG_WIN_PERFECT + dir * 5, 15, 60);
                     JDG_WIN_GREAT   = JDG_WIN_PERFECT * 2;
                     JDG_WIN_GOOD    = JDG_WIN_PERFECT * 10 / 3;
                     break;
+                case 5:  /* 触摸灵敏度 %，步 10。数值越大越不容易被隔壁焊盘误触 */
+                    Touch_SensPct = (uint16_t)clamp_i32(
+                        (int32_t)Touch_SensPct + dir * 10, 50, 250);
+                    break;
+                case 6:  /* 清空历史最高分：只有 S2（dir>0）生效，S1 不动 */
+                    if (dir > 0) Save_ClearRecords();
+                    break;
+                default: /* 4 = USB 开关。按 LAB4 的做法：不在开机时初始化，
+                            由用户主动打开 —— 这样 USB 启动时系统已完全稳定，
+                            且 D+ 上拉后的枚举窗口不会被开机初期的初始化流程占用。 */
+                    if (dir > 0)
+                    {
+                        Usb_Init();               /* 幂等，已开则无动作 */
+                        if (!Usb_IsReady())
+                        {
+                            /* 进入等待模式：主循环会暂停触摸扫描与渲染，
+                               把 CPU 完全让给 USB 枚举（复刻 LAB4 的做法）。
+                               D+ 上拉后主机需要几百 ms 完成枚举，这期间任何
+                               关中断超过 340 µs 的操作（如整屏推屏）都可能
+                               让某个 EP0 事务超时，导致枚举随机失败。 */
+                            screen = M_USBWAIT;
+                            usbWaitTicks = 0;
+                        }
+                    }
+                    break;
                 }
             }
+        }
+        if (ev->s1Long)                       /* S1 长按：直接返回，不落盘 */
+        {
+            screen = M_MAIN;
+            wheelLast = 0xFFFF;               /* 回主菜单重新同步滚轮 */
         }
         if (ev->s2Long)                       /* 落盘 + 返回；顺便把调好的参数打进串口 */
         {
@@ -284,6 +357,11 @@ void Menu_Update(const MenuEvents *ev, uint32_t nowMs)
                                           别把 PL_PAUSED 状态残留给下一局 */
             Render_DemoIdle();
         }
+        break;
+
+    case M_USBWAIT:
+        /* 由主循环计时与退出；这里只处理取消 */
+        if (ev->s1Long) { screen = M_SETTINGS; }
         break;
 
     case M_RESULT:

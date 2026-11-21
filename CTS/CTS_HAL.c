@@ -1511,10 +1511,27 @@ void TI_CTS_fRO_COMPB_TA1_SW_HAL(const struct Sensor *group,uint16_t *counts)
         // Set duration of sensor measurment
         TA1CTL = TASSEL_0+TACLR+MC_1;          // TA1CLK, reset, up mode
         TA1CTL &= ~TAIFG;                      // clear ifg
-        while(!(TA1CTL & TAIFG))
+
+        /* ⚠ 本 HAL 的测量方式不是硬件捕获，而是"数软件循环次数"：
+              while(!(TA1CTL & TAIFG)) { j++; }
+           只要这期间进了一次中断，j 就会偏小，delta = 基线 - j 随之被抬高，
+           表现为"手指没碰也报按下"（实测 delta 会跳到 1200~3300，而真人按压
+           只有 300~600）。USB 串口一打开，主机开始轮询 CDC 端点，中断频率上升，
+           触摸就变得完全不可用 —— 正是这个原因。
+           每路测量约 260 us，这里逐路关中断保护：
+             · 260 us 远小于 USB 全速的 1 ms 帧，Bulk 传输只会被延后，不会丢包
+             · 只在计数循环内关中断，5 路之间仍然开中断，USB ISR 有 5 次机会
+           恢复中断用的是保存的 SR，而不是无条件 __enable_interrupt()，
+           避免把调用者本来就关着的中断打开。 */
         {
-            j++;
-        } // end accumulation
+            uint16_t sr = __get_SR_register();
+            __disable_interrupt();
+            while(!(TA1CTL & TAIFG))
+            {
+                j++;
+            } // end accumulation
+            if (sr & GIE) { __enable_interrupt(); }
+        }
         counts[i] = j;   
         //P1SEL &=~BIT4; 
     }

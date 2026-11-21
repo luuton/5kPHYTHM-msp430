@@ -50,6 +50,20 @@ extern uint32_t Judge_LastHitNoteMs(void);
    比 Chart::length_ms 更可靠（那个是手填字段，与音符列表无关）。 */
 extern uint32_t Judge_LastNoteMs(void);
 
+/* 长条尾巴：命中长条后记录结束时刻（曲目 ms），0 = 无。
+   渲染层用它把尾巴继续画到时间结束；判定层不做尾判。 */
+extern uint32_t Judge_HoldTailMs(uint8_t lane);
+
+/* ---- 长条尾判 ----
+   头判命中长条后该轨进入"尾判进行中"（Judge_HoldActive=1）：
+     · 玩家提前松手 → Judge_HoldRelease()：按 |dt| 与尾巴时刻比较分级，
+       早于 GOOD 窗口 → MISS（长条断掉）
+     · 到尾时仍按着 → Judge_HoldTick()：直接 PERFECT（按到底）
+   两者都会计入连击/分数，并让 Judge_LastResult 更新（屏幕上弹出判定）。 */
+extern uint8_t  Judge_HoldActive(uint8_t lane);
+extern uint8_t  Judge_HoldRelease(uint8_t lane, uint32_t releaseSongT);
+extern uint8_t  Judge_HoldTick(uint32_t songT, uint8_t pressedMask);
+
 /* 最近一次判定结果与发生时刻（曲目 ms），用于屏幕上实时弹出判定文字 */
 extern uint8_t  Judge_LastResult(void);
 extern uint32_t Judge_LastResultMs(void);

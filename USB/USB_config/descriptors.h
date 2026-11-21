@@ -88,7 +88,11 @@ extern "C"
 #define USB_MCLK_FREQ 25000000                // MCLK frequency of MCU, in Hz
 #define USB_PLL_XT        2                  // Defines which XT is used by the PLL (1=XT1, 2=XT2)
 #define USB_XT_FREQ       USBPLL_SETCLK_4_0  // Indicates the freq of the crystal on the oscillator indicated by USB_PLL_XT
-#define USB_DISABLE_XT_SUSPEND 1             // If non-zero, then USB_suspend() will disable the oscillator
+/* ⚠ 本工程必须为 0。设为 1 时 USB_suspend() 会 USBPLLCTL &= ~UPLLEN; UCSCTL6 |= XT2OFF;
+   把 XT2 关掉，而 USB_resume() -> USB_enable() -> XT2_Start() 是死等版重启。
+   主机一旦挂起/恢复（枚举失败时必然发生），CPU 就卡死在 USB 中断里，
+   表现为"卡在 LOGO、心跳停止"。板子由 USB 供电，不需要为省电关晶振。 */
+#define USB_DISABLE_XT_SUSPEND 0
                                              // that is designated by USB_PLL_XT; if zero, USB_suspend won't
                                              // affect the oscillator
 #define USB_DMA_CHAN             0x00        // Set to 0xFF if no DMA channel will be used 0..7 for selected DMA channel

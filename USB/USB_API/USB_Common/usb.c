@@ -271,7 +271,10 @@ BYTE USB_init(VOID)
     USBPWRCTL   =     VUSBEN + SLDOAON; // enable primary and secondary LDO (3.3 and 1.8 V)
     {
     	volatile unsigned int i;
-    	for (i =0; i < USB_MCLK_FREQ/1000*2/10; i++);      // wait some time for LDOs (1ms delay)
+	/* 原式 USB_MCLK_FREQ/1000*2/10 在 25 MHz 下只有 5000 次 ≈ 0.4 ms，
+	   而注释声称 1 ms —— LDO 建立时间不足会让 USB 模块工作异常。
+	   这里去掉 /10，约 8 ms，确保 USB LDO 与带隙充分稳定。 */
+	for (i = 0; i < USB_MCLK_FREQ/1000*2; i++);
     }
 
     USBPWRCTL   =   VUSBEN + SLDOAON + VBONIE;  // enable interrupt VBUSon
@@ -788,17 +791,33 @@ VOID usbSendDataPacketOnEP0(PBYTE pbBuffer)
 
     pbIEP0Buffer = pbBuffer;
     wTemp = tSetupPacket.wLength;
+    {
+        WORD wData = wBytesRemainingOnIEP0;   /* 原始数据长度，下面要用来判断是否"恰好等长" */
 
-    // Limit transfer size to wLength if needed
-    // this prevent USB device sending 'more than require' data back to host
-    if(wBytesRemainingOnIEP0 >= wTemp)
-    {
-        wBytesRemainingOnIEP0 = wTemp;
-        bHostAskMoreDataThanAvailable = FALSE;
-    }
-    else
-    {
-        bHostAskMoreDataThanAvailable = TRUE;
+        // Limit transfer size to wLength if needed
+        // this prevent USB device sending 'more than require' data back to host
+        if (wData >= wTemp)
+        {
+            wBytesRemainingOnIEP0 = wTemp;
+
+            /* ⚠ BUG FIX（TI 原实现这里是 FALSE）：
+               主机请求长度恰好等于数据长度、而数据长度又是 EP0 包大小(8)的
+               整数倍时，最后一包正好填满，必须再补一个零长度包(ZLP)告诉主机
+               "传完了"；否则主机会一直等剩余数据直至超时。
+               本工程的产品/配置/接口字符串都是 40 字节 = 5×8，Windows 枚举时
+               先读 2 字节拿 bLength、再按 40 精确请求，正好命中这个问题：
+               表现为"请求 USB 设备描述符失败"、设备被挂起(代码 43)。
+
+               等号时置 TRUE 只影响"整数倍长度"的情形：
+                 · 等长且非整数倍 → 最后一包是短包，主机自然知道结束，多发的
+                   ZLP 属冗余但无害（主机忽略）
+                 · 主机只请求部分数据(wData > wTemp) → 仍为 FALSE，不补 ZLP ✓ */
+            bHostAskMoreDataThanAvailable = (wData == wTemp) ? TRUE : FALSE;
+        }
+        else
+        {
+            bHostAskMoreDataThanAvailable = TRUE;
+        }
     }
     usbSendNextPacketOnIEP0();
 }

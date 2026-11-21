@@ -33,6 +33,8 @@
 extern void RTLCD_Init(void);
 extern void RTLCD_Clear(void);                 /* 影子清零，不推屏 */
 extern void RTLCD_Present(void);               /* 整屏 8 页批量推屏 */
+/* 把 LCD 用的 USCI_B1 从 SD 卡的慢速配置恢复回来（msc_Init 之后必须调用） */
+extern void RTLCD_RestoreSpi(void);
 extern void RTLCD_PresentPages(uint8_t mask);  /* 只推 1 的页（位0=page0..位7=page7） */
 
 /* 只改影子 */

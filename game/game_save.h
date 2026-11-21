@@ -22,4 +22,16 @@ extern void Save_LoadSettings(void);
    调用点应避开实时路径 —— 目前只在退出设置界面时调用。 */
 extern void Save_StoreSettings(void);
 
+/* ---- 历史最高分（按曲目 0..2，存 INFO D，掉电保持） ---- */
+extern uint32_t Save_BestScore(uint8_t chart);   /* 最高分；0 = 还没打过 */
+extern uint16_t Save_BestCombo(uint8_t chart);   /* 最高连击 */
+
+/* 结算时调用：破纪录则更新并立刻落盘，返回 1。
+   比较规则：先比分数，分数相同再比最大连击。 */
+extern uint8_t Save_TrySetRecord(uint8_t chart, uint32_t score, uint16_t combo);
+
+extern void Save_ClearRecords(void);              /* 清空全部最高分并落盘 */
+extern void    Save_ClearNewRecord(void);        /* 开新局时清标志 */
+extern uint8_t Save_NewRecord(void);             /* 本局是否破纪录（结算页显示） */
+
 #endif /* GAME_SAVE_H */

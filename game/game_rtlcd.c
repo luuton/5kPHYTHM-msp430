@@ -51,6 +51,25 @@ void RTLCD_PresentPages(uint8_t mask)
     }
 }
 
+/* ⚠ LCD 和 SD 卡共用 USCI_B1（这块板子的硬件事实）。
+   msc_Init() -> disk_initialize() -> HAL_SDCard_init() 会把 UCB1 改成
+   UCCKPL + BR=63（397 kHz，SD 卡上电必须 <400 kHz）。
+   推屏 816 字节在 397 kHz 下要 16.5 ms（实测 present=17 ms），
+   而 LCD 自己的设置是 UCCKPH + BR=2（12.5 MHz），只要 0.5 ms。
+   结果就是：一旦初始化过 USB（进而初始化 MSC/SD），屏幕刷新从 0.5 ms
+   变成 17 ms，整帧从 ~10 ms 变成 26~30 ms，输入盲区翻倍，手感变差。
+   本函数把 UCB1 恢复成 LCD 需要的配置（不动屏幕内容）。 */
+void RTLCD_RestoreSpi(void)
+{
+    UCB1CTL1 |= UCSWRST;
+    UCB1CTL0 = UCCKPH + UCMSB + UCMST + UCMODE_0 + UCSYNC;
+    UCB1CTL1 = UCSSEL_2 + UCSWRST;
+    UCB1BR0 = 0x02;                     /* SMCLK/2 = 12.5 MHz */
+    UCB1BR1 = 0;
+    UCB1CTL1 &= ~UCSWRST;
+    UCB1IFG &= ~UCRXIFG;
+}
+
 void RTLCD_Present(void)
 {
     RTLCD_PresentPages(0xFF);

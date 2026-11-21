@@ -125,7 +125,7 @@ void msc_Init(void)
     // declared by the application, and registered with the API using this
     // function.  This allows it to be assigned dynamically, giving
     // the application more control over memory management.
-    USBMSC_registerBufInfo(0, &RW_dataBuf[0], NULL, sizeof(RW_dataBuf));
+    USBMSC_registerBufInfo(&RW_dataBuf[0], NULL, sizeof(RW_dataBuf));
 }
 
 void msc_Loop(void)

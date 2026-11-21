@@ -10,8 +10,8 @@
 //          dt >  GOOD     → 太晚 → 继续下一个（同轨早音符可能还 pending）
 //          其余 → 命中，按 |dt| 分级
 //
-//  RAM 镜像策略：谱面在 Flash 只读，运行前拷一份到 RAM（Note 8 B × 160 = 1280 B，
-//  RAM 有 6.7 KB 空闲），judged/result 直接写在镜像里。
+//  RAM 镜像策略：谱面在 Flash 只读，运行前拷一份到 RAM（Note 6 B × 416 = 2496 B），
+//  judged/result 直接写在镜像里。
 //============================================================================//
 #include <stdint.h>
 #include "game_judge.h"
@@ -31,6 +31,11 @@ static uint16_t combo;
 static uint16_t maxCombo;
 static uint32_t score;
 static uint16_t counts[6];              /* 按 JR_* 统计 */
+
+/* 长条尾巴（只有头判，尾端不判定）：命中长条时记下结束时刻，
+   渲染层据此继续画出还没走完的尾巴。0 = 该轨当前没有长条。 */
+static uint32_t holdTailMs[5] = {0, 0, 0, 0, 0};
+static uint8_t  holdActive[5] = {0, 0, 0, 0, 0};   /* 头已判、尾未判 */
 static uint8_t  anyBreak;               /* 是否有过 MISS/WRONG（full combo 用） */
 static uint32_t lastNoteMs = 0;         /* 谱面最后一个音符的时刻（装载时算出） */
 static uint32_t lastHitNoteMs = 0xFFFFFFFFu;   /* 遥测：最近命中的音符时刻 */
@@ -52,10 +57,15 @@ void Judge_LoadChart(const Chart *c)
         work[i] = c->notes[i];          /* struct 拷贝（8 B） */
         work[i].judged = 0;
         work[i].result = JR_NONE;
-        /* 取最大值而不是直接取末元素：谱面按理按时间升序，但不做假设 */
-        if (work[i].t_ms > lastNoteMs) lastNoteMs = work[i].t_ms;
+        /* 取最大值而不是直接取末元素：谱面按理按时间升序，但不做假设。
+           长条算到尾巴，否则结束时尾巴还没判、结算页会把它切掉。 */
+        {
+            uint32_t te = (uint32_t)work[i].t_ms + work[i].hold_ms;
+            if (te > lastNoteMs) lastNoteMs = te;
+        }
     }
     head = 0;
+    for (i = 0; i < 5; i++) { holdTailMs[i] = 0; holdActive[i] = 0; }
     combo = maxCombo = 0;
     score = 0;
     anyBreak = 0;
@@ -71,6 +81,7 @@ void Judge_Reset(void)
         work[i].result = JR_NONE;
     }
     head = 0;
+    for (i = 0; i < 5; i++) { holdTailMs[i] = 0; holdActive[i] = 0; }
     combo = maxCombo = 0;
     score = 0;
     anyBreak = 0;
@@ -135,6 +146,11 @@ uint8_t Judge_Tap(uint16_t lane, uint32_t tapTimeMs)
             }
             work[n].judged = 1;
             work[n].result = grade_of(dt < 0 ? -dt : dt);
+            if (work[n].hold_ms)
+            {
+                holdTailMs[lane]  = (uint32_t)work[n].t_ms + work[n].hold_ms;
+                holdActive[lane]  = 1;          /* 开始尾判 */
+            }
             lastHitNoteMs = work[n].t_ms;
             dtSum += dt;                       /* 记录带符号的 dt，供均值标定 */
             dtN++;
@@ -174,6 +190,66 @@ uint32_t Judge_LastHitNoteMs(void) { return lastHitNoteMs; }
 
 /* 谱面最后一个音符的时刻（ms），供结束条件计算 */
 uint32_t Judge_LastNoteMs(void) { return lastNoteMs; }
+
+/* 该轨长条的结束时刻（曲目 ms）。0 或已经过去 = 没有正在显示的长条尾巴。 */
+uint32_t Judge_HoldTailMs(uint8_t lane)
+{
+    return (lane < 5u) ? holdTailMs[lane] : 0;
+}
+
+uint8_t Judge_HoldActive(uint8_t lane)
+{
+    return (lane < 5u) ? holdActive[lane] : 0;
+}
+
+/* 提前松手：按松手时刻与尾巴时刻之差分级；早于 GOOD 窗口算断掉（MISS） */
+uint8_t Judge_HoldRelease(uint8_t lane, uint32_t releaseSongT)
+{
+    int32_t dt;
+    uint8_t res;
+
+    if (lane >= 5u || !holdActive[lane]) return JR_NONE;
+
+    dt = (int32_t)releaseSongT + JDG_OFFSET_MS - (int32_t)holdTailMs[lane];
+    holdActive[lane] = 0;                       /* 一次长条只尾判一次 */
+
+    if (dt < -JDG_WIN_GOOD) res = JR_MISS;      /* 提前太多：长条断掉 */
+    else                    res = grade_of(dt < 0 ? -dt : dt);
+
+    lastResult   = res;
+    lastResultMs = releaseSongT;
+    account(res, lane);
+    return res;
+}
+
+/* 到尾检查：仍按着 = 按到底（PERFECT）；已松手但没走 release 路径 = MISS。
+   返回本次判定过的轨掩码，供上层发遥测。 */
+uint8_t Judge_HoldTick(uint32_t songT, uint8_t pressedMask)
+{
+    uint8_t lane, mask = 0;
+    int32_t t = (int32_t)songT + JDG_OFFSET_MS;
+
+    for (lane = 0; lane < 5u; lane++)
+    {
+        if (!holdActive[lane]) continue;
+        if (t < (int32_t)holdTailMs[lane]) continue;   /* 还没到尾 */
+
+        holdActive[lane] = 0;
+        if (pressedMask & (1u << lane))
+        {
+            lastResult = JR_PERFECT;
+            account(JR_PERFECT, lane);
+        }
+        else
+        {
+            lastResult = JR_MISS;
+            account(JR_MISS, lane);
+        }
+        lastResultMs = songT;
+        mask |= (uint8_t)(1u << lane);
+    }
+    return mask;
+}
 
 /* 最近一局命中音符的 dt 均值（ms）。设置界面用它标定 JDG_OFFSET_MS：
    把 OFF 调到 -dtAvg 即可让均值归零。 */
